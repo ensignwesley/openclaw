@@ -90,7 +90,7 @@ export function resolveLocalInterfaceAddressMatch(
   ip: string | undefined,
   snapshot?: NetworkInterfacesSnapshot,
 ): boolean | undefined {
-  const normalized = normalizeIp(ip);
+  const normalized = normalizeIpAddress(ip);
   if (!normalized) {
     return false;
   }
@@ -101,7 +101,7 @@ export function resolveLocalInterfaceAddressMatch(
 
   for (const entries of Object.values(effectiveSnapshot)) {
     for (const entry of entries ?? []) {
-      if (normalizeIp(entry.address) === normalized) {
+      if (normalizeIpAddress(entry.address) === normalized) {
         return true;
       }
     }
@@ -117,10 +117,6 @@ export function resolveLocalInterfaceAddressMatch(
  */
 export function isPrivateOrLoopbackAddress(ip: string | undefined): boolean {
   return isPrivateOrLoopbackIpAddress(ip) && !isRfc8215LocalUseNat64Ipv6Address(ip);
-}
-
-function normalizeIp(ip: string | undefined): string | undefined {
-  return normalizeIpAddress(ip);
 }
 
 function stripOptionalPort(ip: string): string {
@@ -149,15 +145,11 @@ function parseIpLiteral(raw: string | undefined): string | undefined {
     return undefined;
   }
   const stripped = stripOptionalPort(trimmed);
-  const normalized = normalizeIp(stripped);
+  const normalized = normalizeIpAddress(stripped);
   if (!normalized || net.isIP(normalized) === 0) {
     return undefined;
   }
   return normalized;
-}
-
-function parseRealIp(realIp?: string): string | undefined {
-  return parseIpLiteral(realIp);
 }
 
 function resolveForwardedClientIp(params: {
@@ -194,7 +186,7 @@ function resolveForwardedClientIp(params: {
 }
 
 export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: string[]): boolean {
-  const normalized = normalizeIp(ip);
+  const normalized = normalizeIpAddress(ip);
   if (!normalized || !trustedProxies || trustedProxies.length === 0) {
     return false;
   }
@@ -216,7 +208,7 @@ export function resolveClientIp(params: {
   /** Default false: only trust X-Real-IP when explicitly enabled. */
   allowRealIpFallback?: boolean;
 }): string | undefined {
-  const remote = normalizeIp(params.remoteAddr);
+  const remote = normalizeIpAddress(params.remoteAddr);
   if (!remote) {
     return undefined;
   }
@@ -234,7 +226,7 @@ export function resolveClientIp(params: {
     return forwardedIp;
   }
   if (params.allowRealIpFallback) {
-    return parseRealIp(params.realIp);
+    return parseIpLiteral(params.realIp);
   }
   return undefined;
 }
@@ -472,7 +464,7 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
   if (parsed.isLocalhost) {
     return true;
   }
-  const normalized = normalizeIp(parsed.unbracketedHost);
+  const normalized = normalizeIpAddress(parsed.unbracketedHost);
   if (!normalized || !isPrivateOrLoopbackAddress(normalized)) {
     return false;
   }
