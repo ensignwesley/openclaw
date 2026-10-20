@@ -156,7 +156,6 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
     outputSchema: CronToolOutputSchema,
     parameters: createCronToolSchema({
       readOnly,
-      agentSessionKey: opts?.agentSessionKey,
       triggersEnabled,
       selfRemoveOnly,
       management: managementAuthority
