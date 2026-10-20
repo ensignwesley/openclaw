@@ -65,9 +65,16 @@ function toolFixture(
   return { tool, request, read, context, expectWorkspace };
 }
 
-it("is available only for owner turns even when native plugin policy is disabled", () => {
+it("keeps its declaration stable but denies non-owner calls before reading inputs or bindings", async () => {
   expect(toolFixture().tool?.name).toBe("codex_plugins");
-  expect(toolFixture({ owner: false }).tool).toBeNull();
+  const owner = toolFixture();
+  const nonowner = toolFixture({ owner: false });
+  expect(nonowner.tool?.name).toBe(owner.tool?.name);
+  expect(nonowner.tool?.parameters).toEqual(owner.tool?.parameters);
+  const params = new Proxy({}, { get: () => { throw new Error("read params"); } });
+  await expect(nonowner.tool?.execute("blocked", params)).rejects.toThrow(/owner-authorized/);
+  expect(nonowner.read).not.toHaveBeenCalled();
+  expect(nonowner.request).not.toHaveBeenCalled();
 });
 
 it("uses the bound workspace, exposes bounded untrusted metadata, and never installs", async () => {

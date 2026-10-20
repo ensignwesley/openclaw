@@ -138,7 +138,7 @@ type CodexSupervisionToolsOptions = {
   >["resolveCodexSupervisionAppServerRuntimeOptions"];
   getRuntimeConfig?: () => OpenClawConfig | undefined;
   /** Trusted owner bit supplied by the plugin tool context. */
-  senderIsOwner: boolean;
+  senderIsOwner: boolean | (() => boolean);
   assertInvocationCurrent?: () => void;
   env?: NodeJS.ProcessEnv;
   /** Test seam; production omits this to use the canonical shared client. */
@@ -707,7 +707,7 @@ function requireLiveToolPolicyConfig(
   policy: CodexSupervisionRequestPolicy,
 ): CodexPluginConfig {
   options.assertInvocationCurrent?.();
-  if (!options.senderIsOwner) {
+  if ((typeof options.senderIsOwner === "function" ? options.senderIsOwner() : options.senderIsOwner) !== true) {
     throw new CodexSupervisionPolicyError(
       "Codex supervision compatibility tools require an owner-authorized sender.",
     );

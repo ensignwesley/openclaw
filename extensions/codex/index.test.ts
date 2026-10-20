@@ -351,8 +351,12 @@ describe("codex plugin", () => {
     expect(registration.create({ senderIsOwner: true }).map((tool) => tool.name)).toEqual([
       ...CODEX_SUPERVISION_COMPAT_TOOL_NAMES,
     ]);
-    expect(registration.create({ senderIsOwner: false })).toEqual([]);
-    expect(registration.create()).toEqual([]);
+    expect(registration.create({ senderIsOwner: false }).map((tool) => tool.name)).toEqual([
+      ...CODEX_SUPERVISION_COMPAT_TOOL_NAMES,
+    ]);
+    expect(registration.create().map((tool) => tool.name)).toEqual([
+      ...CODEX_SUPERVISION_COMPAT_TOOL_NAMES,
+    ]);
   });
 
   it.each([

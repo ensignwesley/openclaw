@@ -95,10 +95,12 @@ describe("native Codex thread tool", () => {
     });
   }
 
-  it("materializes only for owner turns with user-home or supervision access", () =>
+  it("keeps configured declarations across sender turns", () =>
     withFixture(async () => {
       expect(await createTool()).not.toBeNull();
-      expect(await createTool({ owner: false })).toBeNull();
+      const nonowner = await createTool({ owner: false });
+      expect(nonowner?.name).toBe("codex_threads");
+      await expect(nonowner?.execute("blocked", {})).rejects.toThrow(/owner-authorized/);
       expect(await createTool({ homeScope: "agent" })).toBeNull();
       expect(await createTool({ omitHomeScope: true, supervision: true })).not.toBeNull();
     }));
