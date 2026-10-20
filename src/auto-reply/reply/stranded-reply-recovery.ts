@@ -58,7 +58,9 @@ export function resolveStrandedReplyRecovery(params: {
       summaryLine: STRANDED_REPLY_RETRY_MARKER,
       strandedReplyRetry: true,
       disableCollectBatching: true,
-      toolsAllow: isRuntimeToolAllowed("message", params.base.toolsAllow) ? ["message"] : [],
+      toolExecutionAllow: isRuntimeToolAllowed("message", params.base.toolsAllow)
+        ? ["message"]
+        : [],
       transcriptPrompt: undefined,
       userTurnTranscriptRecorder: undefined,
       currentInboundContext: undefined,

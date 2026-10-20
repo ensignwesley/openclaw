@@ -124,7 +124,12 @@ export async function runCodeModeExec(params: {
     preparedCatalogs.set(entries, prepared);
   }
   const { namespaceRuntime, catalogProjection } = prepared;
-  const swarmEnabled = isCodeModeSwarmAvailable(params.ctx, entries);
+  const swarmEnabled = isCodeModeSwarmAvailable(
+    params.ctx.preserveToolPresentation
+      ? { ...params.ctx, toolExecutionAllow: undefined }
+      : params.ctx,
+    entries,
+  );
   const workerCatalog = (prepared.workerCatalogs[Number(swarmEnabled)] ??=
     prepareCodeModeNodeCatalog({
       catalog: catalogProjection.guestBindings,

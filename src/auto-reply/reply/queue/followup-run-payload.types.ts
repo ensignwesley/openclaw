@@ -131,6 +131,8 @@ export type FollowupRunPayload = {
   summaryLine?: string;
   /** Turn-owned tool authority captured before queue ownership transfers. */
   toolsAllow?: string[];
+  /** Restrict execution without changing the retry's foreground tool presentation. */
+  toolExecutionAllow?: readonly string[];
   disableTools?: boolean;
   forceRestartSafeTools?: boolean;
   forceCodeModeTools?: boolean;

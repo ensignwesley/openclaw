@@ -28,6 +28,7 @@ export async function prepareEmbeddedSkills(params: {
     | "skillsSnapshot"
     | "contextTokenBudget"
     | "toolExecutionAllow"
+    | "preserveToolPresentation"
     | "operation"
   >;
   effectiveWorkspace: string;
@@ -40,7 +41,9 @@ export async function prepareEmbeddedSkills(params: {
   // creates impossible prerequisites and exposes an ungated Code Mode reader.
   if (
     params.attempt.operation === "settled-tool-finalization" ||
-    (executionAllow && !isToolExecutionAllowed(executionAllow, "read"))
+    (executionAllow &&
+      !params.attempt.preserveToolPresentation &&
+      !isToolExecutionAllowed(executionAllow, "read"))
   ) {
     return {
       restoreSkillEnv: () => {},

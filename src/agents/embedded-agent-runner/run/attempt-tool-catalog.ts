@@ -94,6 +94,7 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
         abortSignal,
         forceRestartSafeTools: attempt.forceRestartSafeTools,
         toolExecutionAllow: attempt.toolExecutionAllow,
+        preserveToolPresentation: attempt.preserveToolPresentation,
         executeTool: input.executeCodeModeTool,
         codeModeSkills,
         preserveToolNames: localModelLeanPreserveToolNames,

@@ -92,6 +92,8 @@ export type ToolSearchToolContext = {
   forceRestartSafeTools?: boolean;
   /** Set when the run executes only these tools; swarm globals gate on `sessions_spawn`. */
   toolExecutionAllow?: readonly string[];
+  /** Retain the foreground Code Mode declaration shape under an execution-only cap. */
+  preserveToolPresentation?: boolean;
   codeModeSkills?: Readonly<AgentToolSurfacePresentation["skills"]>;
 };
 

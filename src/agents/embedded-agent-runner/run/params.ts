@@ -183,6 +183,8 @@ export type RunEmbeddedAgentParams = Pick<
   toolsAllow?: string[];
   /** Preserve the visible tool schemas while allowing execution only for these names. */
   toolExecutionAllow?: readonly string[];
+  /** Execution-only recovery keeps the foreground prompt and declarations stable. */
+  preserveToolPresentation?: boolean;
   /** Host-stamped exact-run capability for late Codex creator-authority capture. */
   cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
   /** Ephemeral reason fresh local-operator cron authority cannot survive this queued turn. */

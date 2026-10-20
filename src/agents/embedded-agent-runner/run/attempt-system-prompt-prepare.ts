@@ -210,7 +210,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     attempt.promptMode ??
     (params.isRawModelRun ? "none" : resolvePromptModeForSession(attempt.sessionKey));
   const promptSurface = resolveAgentPromptSurfaceForSessionKey(attempt.sessionKey);
-  const toolPolicyRestricted = toolPolicyRestrictsTools({ allow: attempt.toolsAllow });
+  const toolPolicyRestricted =
+    !attempt.preserveToolPresentation && toolPolicyRestrictsTools({ allow: attempt.toolsAllow });
   const effectivePromptMode = toolPolicyRestricted ? ("minimal" as const) : promptMode;
   const effectiveSkillsPrompt = toolPolicyRestricted ? undefined : params.skillsPrompt;
   const openClawReferences =

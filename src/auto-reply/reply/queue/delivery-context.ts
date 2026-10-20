@@ -267,6 +267,7 @@ type FollowupRuntimeMetadata = Pick<
   | "channelAdmissionEvidence"
   | "gatewayLocalUserIngress"
   | "toolsAllow"
+  | "toolExecutionAllow"
   | "disableTools"
   | "forceRestartSafeTools"
   | "forceCodeModeTools"
@@ -398,6 +399,7 @@ export function collectRuntimeMetadata(
       items.map((item) => item.gatewayLocalUserIngress),
     ),
     toolsAllow: authoritySource?.toolsAllow,
+    toolExecutionAllow: authoritySource?.toolExecutionAllow,
     disableTools: authoritySource?.disableTools,
     forceRestartSafeTools: authoritySource?.forceRestartSafeTools,
     forceCodeModeTools: authoritySource?.forceCodeModeTools,
@@ -457,6 +459,7 @@ export function createOverflowSummaryRetrySource(source: InternalFollowupRun): I
     userTurnTranscriptRecorder: source.userTurnTranscriptRecorder,
     explicitSkillSelections: source.explicitSkillSelections,
     toolsAllow: source.toolsAllow,
+    toolExecutionAllow: source.toolExecutionAllow,
     disableTools: source.disableTools,
     forceRestartSafeTools: source.forceRestartSafeTools,
     forceCodeModeTools: source.forceCodeModeTools,

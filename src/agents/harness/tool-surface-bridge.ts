@@ -34,7 +34,12 @@ const CODE_MODE_CONTROL_ALLOWLIST_NAMES = [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_W
 
 type PreparedToolSurface = Pick<
   Parameters<typeof createCodeModeTools>[0],
-  "abortSignal" | "executeTool" | "forceRestartSafeTools" | "toolExecutionAllow" | "codeModeSkills"
+  | "abortSignal"
+  | "executeTool"
+  | "forceRestartSafeTools"
+  | "toolExecutionAllow"
+  | "preserveToolPresentation"
+  | "codeModeSkills"
 > & { preserveToolNames: Iterable<string> };
 
 export function createAgentHarnessToolSurfaceRuntimeCore(
@@ -171,6 +176,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
           executeTool: prepared?.executeTool ?? params.executeTool,
           forceRestartSafeTools: prepared?.forceRestartSafeTools,
           toolExecutionAllow: prepared?.toolExecutionAllow,
+          preserveToolPresentation: prepared?.preserveToolPresentation,
           codeModeSkills,
         })
       : [];

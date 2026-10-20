@@ -305,6 +305,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       contextTokenBudget: runtime.contextTokenBudget,
       skillsSnapshot: params.skillsSnapshot,
       toolExecutionAllow: params.toolExecutionAllow,
+      preserveToolPresentation: params.preserveToolPresentation,
     },
     effectiveWorkspace: workspaceDir,
     sandbox: pluginSandbox,
@@ -622,6 +623,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
     toolsAllow: params.toolsAllow,
     toolExecutionAllow: params.toolExecutionAllow,
+    preserveToolPresentation: params.preserveToolPresentation,
     // Authorized prompt enrichment needs the exact prepared turn policy identity.
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     sessionPersistence: params.sessionPersistence,

@@ -191,7 +191,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const skillInstructionDeliveryCache = new Map<string, Promise<boolean>>();
   const toolSearchCatalogRef = toolSurfaceRuntime.toolSearchCatalogRef;
   const nestedToolActivityState = createAttemptNestedToolActivityState();
-  const codeModeSkills = toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
+  const codeModeSkills =
+    !attempt.preserveToolPresentation && toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
     ? []
     : params.codeModeSkills;
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
