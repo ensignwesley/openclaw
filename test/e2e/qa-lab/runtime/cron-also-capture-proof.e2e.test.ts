@@ -222,13 +222,18 @@ it(
           throw new Error(`isolated Gateway did not become ready: ${gatewayStderr}`);
         }
 
+        const bootstrap = await SkillLibraryWireClient.connect(instance);
+        clients.push(bootstrap.client);
+        const buildId = bootstrap.hello.server.buildId;
         const ordinary = await SkillLibraryWireClient.connect(instance, {
           email: SKILL_LIBRARY_ALICE,
           scopes: ["operator.read", "operator.write"],
+          buildId,
         });
         const admin = await SkillLibraryWireClient.connect(instance, {
           email: SKILL_LIBRARY_ALICE,
           scopes: ["operator.admin", "operator.read", "operator.write"],
+          buildId,
         });
         clients.push(ordinary.client, admin.client);
         expect(ordinary.hello.auth?.scopes).not.toContain("operator.admin");
