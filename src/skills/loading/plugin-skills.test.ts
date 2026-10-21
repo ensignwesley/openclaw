@@ -58,6 +58,7 @@ vi.mock("../../plugins/plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: hoisted.loadPluginRegistrySnapshot,
 }));
 
+// mock-isolation: Partial projections must not be completed by the real snapshot owner.
 vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: hoisted.loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: hoisted.resolvePluginMetadataSnapshot,
@@ -210,7 +211,7 @@ describe("resolvePluginSkillRoots", () => {
       workspaceDir,
       config: enabledConfig("provider", "helper"),
       pluginSkillsDir,
-      metadataSnapshot: partial as PluginMetadataSnapshot,
+      metadataSnapshot: partial as unknown as PluginMetadataSnapshot,
     });
 
     expect(roots.map((root) => root.dir)).toEqual([path.join(pluginRoot, "skills")]);
@@ -237,7 +238,7 @@ describe("resolvePluginSkillRoots", () => {
         workspaceDir,
         config,
         pluginSkillsDir,
-        metadataSnapshot: { pluginIds: ["provider"] } as PluginMetadataSnapshot,
+        metadataSnapshot: { pluginIds: ["provider"] } as unknown as PluginMetadataSnapshot,
       }),
     ).toThrow("Plugin skill discovery requires complete plugin metadata");
     expect(await fs.readlink(path.join(pluginSkillsDir, "helper"))).toBe(skillDir);
