@@ -70,9 +70,12 @@ it(
     let gateway: ChildProcess | undefined;
     const declarations = new Map<string, string>();
     const toolOutcomes = new Map<string, string>();
+    const providerErrors: string[] = [];
+    let providerRequests = 0;
     let jobId: string | undefined;
     const provider = createNativeProvider(
       async (request, response, rawBody) => {
+        providerRequests++;
         if (request.url !== "/v1/chat/completions") {
           response.writeHead(404).end();
           return;
@@ -127,7 +130,10 @@ it(
           "tool_calls",
         );
       },
-      (error, response) => response.writeHead(500).end(String(error)),
+      (error, response) => {
+        providerErrors.push(String(error).slice(0, 500));
+        response.writeHead(500).end(String(error));
+      },
     );
     await runQaGatewayFixture(
       async () => {
@@ -249,8 +255,19 @@ it(
             30_000,
             { expectedProfileId: profile.profile.id },
           );
+          const terminal = await client.request<{ status: string }>(
+            "agent.wait",
+            { runId: started.runId, timeoutMs: 60_000 },
+            65_000,
+          );
           expect(
-            await client.request("agent.wait", { runId: started.runId, timeoutMs: 60_000 }, 65_000),
+            terminal,
+            JSON.stringify({
+              marker,
+              providerRequests,
+              providerErrors,
+              gatewayStderr: gatewayStderr.slice(-3000),
+            }),
           ).toMatchObject({ status: "ok" });
         }
         await turn(ordinary.client, "CAPTURE_ORDINARY");
