@@ -98,11 +98,14 @@ it(
             ),
           ),
         });
-        const lastUser = messages.findLastIndex((message) => message.role === "user");
-        const current = JSON.stringify(messages[lastUser]?.content ?? "");
-        const marker = ["CAPTURE_ORDINARY", "CAPTURE_ADMIN", "ORDINARY_EDIT", "ADMIN_EDIT"].find(
-          (candidate) => current.includes(candidate),
+        const markers = ["CAPTURE_ORDINARY", "CAPTURE_ADMIN", "ORDINARY_EDIT", "ADMIN_EDIT"];
+        const markedUser = messages.findLastIndex(
+          (message) =>
+            message.role === "user" &&
+            markers.some((candidate) => JSON.stringify(message.content ?? "").includes(candidate)),
         );
+        const current = JSON.stringify(messages[markedUser]?.content ?? "");
+        const marker = markers.find((candidate) => current.includes(candidate));
         if (!marker) {
           throw new Error("model request had no proof marker");
         }
@@ -115,7 +118,7 @@ it(
           writeNativeCompletion(response, `proof-${marker}`, body.model, "Captured.");
           return;
         }
-        const subsequent = messages.slice(lastUser + 1);
+        const subsequent = messages.slice(markedUser + 1);
         const toolMessage = subsequent.findLast((message) => message.role === "tool");
         if (toolMessage) {
           toolOutcomes.set(marker, JSON.stringify(toolMessage.content));
