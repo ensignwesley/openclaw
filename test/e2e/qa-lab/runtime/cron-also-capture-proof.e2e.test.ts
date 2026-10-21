@@ -71,6 +71,11 @@ it(
     const declarations = new Map<string, string>();
     const toolOutcomes = new Map<string, string>();
     const providerErrors: string[] = [];
+    const providerShapes: Array<{
+      roles: string[];
+      userBytes: number[];
+      markerInAnyMessage: boolean;
+    }> = [];
     let providerRequests = 0;
     let jobId: string | undefined;
     const provider = createNativeProvider(
@@ -82,6 +87,17 @@ it(
         }
         const body = JSON.parse(rawBody) as ModelRequest;
         const messages = body.messages ?? [];
+        providerShapes.push({
+          roles: messages.map((message) => message.role ?? "none"),
+          userBytes: messages
+            .filter((message) => message.role === "user")
+            .map((message) => Buffer.byteLength(JSON.stringify(message.content ?? ""))),
+          markerInAnyMessage: messages.some((message) =>
+            ["CAPTURE_ORDINARY", "CAPTURE_ADMIN", "ORDINARY_EDIT", "ADMIN_EDIT"].some((candidate) =>
+              JSON.stringify(message.content ?? "").includes(candidate),
+            ),
+          ),
+        });
         const lastUser = messages.findLastIndex((message) => message.role === "user");
         const current = JSON.stringify(messages[lastUser]?.content ?? "");
         const marker = ["CAPTURE_ORDINARY", "CAPTURE_ADMIN", "ORDINARY_EDIT", "ADMIN_EDIT"].find(
@@ -266,6 +282,7 @@ it(
               marker,
               providerRequests,
               providerErrors,
+              providerShapes: providerShapes.slice(-2),
               gatewayStderr: gatewayStderr.slice(-3000),
             }),
           ).toMatchObject({ status: "ok" });
