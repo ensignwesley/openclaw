@@ -1,0 +1,61 @@
+name: Throwaway cron-also runtime proof
+
+on:
+  push:
+    branches:
+      - proof/cron-also-runtime
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      CI: "true"
+      NODE_OPTIONS: --max-old-space-size=8192
+      OPENCLAW_E2E_WORKERS: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.16.0"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "12.12.1"
+      - name: Retain proof test outside both source revisions
+        run: cp test/e2e/qa-lab/runtime/cron-also-capture-proof.e2e.test.ts "$RUNNER_TEMP/cron-also-capture-proof.e2e.test.ts"
+      - name: Fetch pinned unmodified upstream main
+        run: git fetch https://github.com/openclaw/openclaw.git main
+      - name: Build and capture unmodified main
+        env:
+          OPENCLAW_PROOF_REVISION: main
+          OPENCLAW_PROOF_ARTIFACT_DIR: ${{ github.workspace }}/proof-artifacts/main
+        run: |
+          git checkout --detach 9b9364cfed049011d7e062cdbc636f082a270086
+          cp "$RUNNER_TEMP/cron-also-capture-proof.e2e.test.ts" test/e2e/qa-lab/runtime/cron-also-capture-proof.e2e.test.ts
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm build
+          node node_modules/vitest/vitest.mjs run test/e2e/qa-lab/runtime/cron-also-capture-proof.e2e.test.ts --config test/vitest/vitest.e2e.config.ts --maxWorkers=1
+      - name: Build and capture PR head
+        env:
+          OPENCLAW_PROOF_REVISION: pr
+          OPENCLAW_PROOF_ARTIFACT_DIR: ${{ github.workspace }}/proof-artifacts/pr
+        run: |
+          git checkout --detach a241bad91d21f8f0562067716ce9fcab1ce9852f
+          cp "$RUNNER_TEMP/cron-also-capture-proof.e2e.test.ts" test/e2e/qa-lab/runtime/cron-also-capture-proof.e2e.test.ts
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm build
+          node node_modules/vitest/vitest.mjs run test/e2e/qa-lab/runtime/cron-also-capture-proof.e2e.test.ts --config test/vitest/vitest.e2e.config.ts --maxWorkers=1
+      - name: Upload bounded synthetic capture
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cron-also-runtime-proof
+          path: proof-artifacts/
+          if-no-files-found: warn
+          retention-days: 3
