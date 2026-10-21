@@ -1,7 +1,11 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { createServer } from "node:net";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { expect, it } from "vitest";
+import { createOpenClawTestInstance } from "../../../helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   closeNativeProvider,
@@ -10,11 +14,7 @@ import {
   nativeModel,
   writeNativeCompletion,
 } from "./native-provider-proof-fixture.js";
-import {
-  createSkillLibraryWireInstance,
-  SKILL_LIBRARY_ALICE,
-  SkillLibraryWireClient,
-} from "./skill-library-wire-fixture.js";
+import { SKILL_LIBRARY_ALICE, SkillLibraryWireClient } from "./skill-library-wire-fixture.js";
 
 type ModelMessage = { role?: string; content?: unknown };
 type ModelRequest = {
@@ -29,12 +29,45 @@ if ((revision !== "main" && revision !== "pr") || !artifactDir) {
   throw new Error("proof revision and artifact directory are required");
 }
 
+async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("proof port unavailable");
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  return address.port;
+}
+
 it(
   "captures real ordinary and admin-also declarations and execution authority",
   { timeout: 240_000 },
   async () => {
-    const instance = await createSkillLibraryWireInstance();
+    const instance = await createOpenClawTestInstance({
+      name: "cron-also-proof",
+      port: await freePort(),
+      reserveIdlePort: false,
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        VITEST: undefined,
+        VITEST_POOL_ID: undefined,
+        VITEST_WORKER_ID: undefined,
+        NODE_ENV: undefined,
+        CODEX_HOME: undefined,
+        OPENAI_API_KEY: undefined,
+        ANTHROPIC_API_KEY: undefined,
+        OPENCLAW_BUILD_PRIVATE_QA: "1",
+      },
+    });
     const clients: SkillLibraryWireClient[] = [];
+    let gateway: ChildProcess | undefined;
     const declarations = new Map<string, string>();
     const toolOutcomes = new Map<string, string>();
     let jobId: string | undefined;
@@ -100,6 +133,27 @@ it(
       async () => {
         const providerUrl = await listenNativeProvider(provider);
         const config = JSON.parse(await fs.readFile(instance.configPath, "utf8"));
+        config.gateway = {
+          mode: "local",
+          bind: "loopback",
+          port: instance.port,
+          trustedProxies: ["127.0.0.1", "::1"],
+          nodes: { pairing: { autoApproveLocal: true } },
+          auth: {
+            mode: "trusted-proxy",
+            password: instance.gatewayToken,
+            identityScopes: {
+              [SKILL_LIBRARY_ALICE]: ["operator.admin", "operator.read", "operator.write"],
+            },
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              allowLoopback: true,
+              requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
+              allowUsers: [SKILL_LIBRARY_ALICE],
+            },
+          },
+          controlUi: { enabled: false, allowedOrigins: [`http://127.0.0.1:${instance.port}`] },
+        };
         const modelRef = "proof-provider/proof-model";
         config.models = {
           mode: "replace",
@@ -123,7 +177,50 @@ it(
         config.tools = { profile: "full", codeMode: false, toolSearch: false };
         config.plugins = { enabled: false, slots: { memory: "none" } };
         await instance.state.writeConfig(config);
-        await instance.startGateway();
+        const gatewayArgs = await instance.entrypoint();
+        let gatewayStderr = "";
+        gateway = spawn(
+          process.execPath,
+          [
+            ...gatewayArgs,
+            "gateway",
+            "--port",
+            String(instance.port),
+            "--bind",
+            "loopback",
+            "--allow-unconfigured",
+          ],
+          {
+            cwd: process.cwd(),
+            env: instance.env,
+            detached: true,
+            stdio: ["ignore", "ignore", "pipe"],
+          },
+        );
+        gateway.stderr?.on("data", (chunk: Buffer) => {
+          gatewayStderr = (gatewayStderr + chunk.toString()).slice(-16_384);
+        });
+        let ready = false;
+        for (let attempt = 0; attempt < 240; attempt++) {
+          if (gateway.exitCode !== null || gateway.signalCode !== null) {
+            throw new Error(`isolated Gateway exited before readiness: ${gatewayStderr}`);
+          }
+          try {
+            const response = await fetch(`http://127.0.0.1:${instance.port}/readyz`, {
+              signal: AbortSignal.timeout(1_000),
+            });
+            if (response.ok) {
+              ready = true;
+              break;
+            }
+          } catch {
+            // The child has not opened its listener yet.
+          }
+          await sleep(500);
+        }
+        if (!ready) {
+          throw new Error(`isolated Gateway did not become ready: ${gatewayStderr}`);
+        }
 
         const ordinary = await SkillLibraryWireClient.connect(instance, {
           email: SKILL_LIBRARY_ALICE,
@@ -211,6 +308,26 @@ it(
       },
       async () => {
         await Promise.all(clients.map((client) => client.close()));
+        if (gateway?.pid && gateway.exitCode === null && gateway.signalCode === null) {
+          try {
+            process.kill(-gateway.pid, "SIGTERM");
+          } catch {
+            /* Already exited. */
+          }
+          await Promise.race([
+            new Promise<void>((resolve) => {
+              gateway?.once("exit", () => resolve());
+            }),
+            sleep(5_000),
+          ]);
+          if (gateway.exitCode === null && gateway.signalCode === null) {
+            try {
+              process.kill(-gateway.pid, "SIGKILL");
+            } catch {
+              /* Already exited. */
+            }
+          }
+        }
         await instance.cleanup();
         await closeNativeProvider(provider);
       },
