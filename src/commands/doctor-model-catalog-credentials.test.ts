@@ -273,7 +273,7 @@ describe("doctor model catalog credential migration", () => {
     "does not import generated plaintext beside a canonical %s SecretRef",
     async (type) => {
       const state = createState();
-      const reference = { source: "env" as const, id: "FIXTURE_CUSTOM_KEY" };
+      const reference = { source: "env" as const, provider: "default", id: "FIXTURE_CUSTOM_KEY" };
       const canonical =
         type === "api_key"
           ? { type, provider: "custom", keyRef: reference }
@@ -306,7 +306,7 @@ describe("doctor model catalog credential migration", () => {
     const canonical = {
       type: "api_key" as const,
       provider: "custom",
-      keyRef: { source: "env" as const, id: "FIXTURE_CUSTOM_KEY" },
+      keyRef: { source: "env" as const, provider: "default", id: "FIXTURE_CUSTOM_KEY" },
     };
     saveAuthProfileStore({ version: 1, profiles: { "custom:default": canonical } }, state.agentDir);
     fs.writeFileSync(
@@ -339,7 +339,7 @@ describe("doctor model catalog credential migration", () => {
     const canonical = {
       type: "api_key" as const,
       provider: "custom",
-      keyRef: { source: "env" as const, id: "FIXTURE_CUSTOM_KEY" },
+      keyRef: { source: "env" as const, provider: "default", id: "FIXTURE_CUSTOM_KEY" },
     };
     const params = migrationParams(state, {});
     params.prompter = {
@@ -379,7 +379,7 @@ describe("doctor model catalog credential migration", () => {
     const canonical = {
       type: "api_key" as const,
       provider: "custom",
-      keyRef: { source: "env" as const, id: "FIXTURE_CUSTOM_KEY" },
+      keyRef: { source: "env" as const, provider: "default", id: "FIXTURE_CUSTOM_KEY" },
     };
     const cfg: OpenClawConfig = {
       agents: {
