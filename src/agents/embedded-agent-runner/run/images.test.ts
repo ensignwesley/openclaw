@@ -59,6 +59,55 @@ function loadImages(options: Omit<ImageOptions, "model"> & Partial<Pick<ImageOpt
 }
 
 describe("prompt image preparation", () => {
+  it("does not infer a transient image from canonical recorded text", async () => {
+    const workspaceDir = tempDirs.make("openclaw-recorded-text-image-");
+    await writePng(path.join(workspaceDir, "diagram.png"));
+    const base = {
+      mediaOwnerAgentId: "main",
+      effectiveFsWorkspaceOnly: true,
+      effectiveWorkspace: workspaceDir,
+      prompt: "Review ./diagram.png",
+      skipPromptSubmission: false,
+    };
+    const recorder = {
+      resolveMessage: async () => ({ role: "user", content: "Review ./diagram.png" }),
+    } as never;
+    const attempt = {
+      workspaceDir,
+      model: { input: ["text", "image"] },
+      userTurnTranscriptRecorder: recorder,
+    };
+
+    const first = await prepareEmbeddedAttemptPromptExecution({ ...base, attempt });
+    const replay = await prepareEmbeddedAttemptPromptExecution({ ...base, attempt });
+    expect(first.images).toEqual([]);
+    expect(replay.images).toEqual(first.images);
+    expect(
+      (
+        await prepareEmbeddedAttemptPromptExecution({
+          ...base,
+          attempt: { workspaceDir, model: { input: ["text", "image"] } },
+        })
+      ).images,
+    ).toHaveLength(1);
+    expect(
+      (
+        await prepareEmbeddedAttemptPromptExecution({
+          ...base,
+          attempt: { ...attempt, media: [{ path: "./diagram.png", contentType: "image/png" }] },
+        })
+      ).images,
+    ).toHaveLength(1);
+    expect(
+      (
+        await prepareEmbeddedAttemptPromptExecution({
+          ...base,
+          attempt: { ...attempt, images: [pngImage()] },
+        })
+      ).images,
+    ).toHaveLength(1);
+  });
+
   it.each([false, true])("skips filesystem roots for inline=%s input", async (inline) => {
     const roots = vi.spyOn(mediaLocalRoots, "getAgentScopedMediaLocalRoots");
     const images = inline ? [pngImage()] : [];

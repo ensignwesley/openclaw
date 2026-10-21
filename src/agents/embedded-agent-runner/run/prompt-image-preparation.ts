@@ -43,7 +43,8 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
   const { attempt } = input;
   let localRoots: readonly string[] | undefined;
   const result = await detectAndLoadPromptImages({
-    prompt: input.prompt,
+    // A recorded turn must hydrate images from admitted facts, not incidental text paths.
+    prompt: attempt.userTurnTranscriptRecorder ? "" : input.prompt,
     workspaceDir: input.effectiveWorkspace,
     agentWorkspaceDir: attempt.workspaceDir,
     model: attempt.model,
