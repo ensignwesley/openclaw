@@ -168,7 +168,7 @@ it(
               baseUrl: providerUrl,
               api: "openai-completions",
               apiKey: "synthetic-proof-key",
-              models: [nativeModel("proof-model")],
+              models: [nativeModel("proof-model", { contextWindow: 131_072 })],
             },
           },
         };
