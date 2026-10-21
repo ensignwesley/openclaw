@@ -76,6 +76,16 @@ function findProviderSecretRefProfiles(store: AuthProfileStore, cfg: OpenClawCon
   );
 }
 
+function hasProviderSecretRef(store: AuthProfileStore, provider: string): boolean {
+  const normalized = normalizeProviderId(provider);
+  return Object.values(store.profiles).some(
+    (credential) =>
+      normalizeProviderId(credential.provider) === normalized &&
+      ((credential.type === "api_key" && credential.keyRef !== undefined) ||
+        (credential.type === "token" && credential.tokenRef !== undefined)),
+  );
+}
+
 function collectCredentials(
   providers: unknown,
   store: AuthProfileStore,
@@ -95,6 +105,7 @@ function collectCredentials(
       !key.trim() ||
       // An authored SecretRef owns this provider; generated catalog copies are never fallbacks.
       (cfg && resolveProviderConfigSecretInput(cfg, provider).ref) ||
+      hasProviderSecretRef(store, provider) ||
       isNonSecretApiKeyMarker(key) ||
       store.profiles[key] !== undefined ||
       findMatchingProfileId(store, credential, blockedStores) !== undefined
@@ -160,6 +171,7 @@ async function persistCredentials(params: {
   agentDir?: string;
   blockedStores?: readonly AuthProfileStore[];
   credentials: readonly PlaintextCredential[];
+  env: NodeJS.ProcessEnv;
   inheritedStore?: AuthProfileStore;
   invalidProfiles: ReadonlyArray<[string, AuthProfileCredential]>;
   stateDir: string;
@@ -192,10 +204,16 @@ async function persistCredentials(params: {
           }),
         );
       }
-      const effectiveStore = params.inheritedStore
-        ? mergeAuthProfileStores(params.inheritedStore, localStore)
+      const inheritedStore = params.inheritedStore
+        ? (loadPersistedSharedAuthProfileStore(params.env) ?? params.inheritedStore)
+        : undefined;
+      const effectiveStore = inheritedStore
+        ? mergeAuthProfileStores(inheritedStore, localStore)
         : localStore;
       for (const credential of credentials) {
+        if (hasProviderSecretRef(effectiveStore, credential.provider)) {
+          continue;
+        }
         const profileId =
           findMatchingProfileId(effectiveStore, credential, blockedStores) ??
           allocateProfileId(effectiveStore, credential, blockedStores);
@@ -219,10 +237,7 @@ async function persistCredentials(params: {
   }
   const persisted = params.agentDir
     ? loadPersistedAuthProfileStore(params.agentDir)
-    : loadPersistedSharedAuthProfileStore({
-        ...process.env,
-        OPENCLAW_STATE_DIR: params.stateDir,
-      });
+    : loadPersistedSharedAuthProfileStore(params.env);
   const effectivePersisted = params.inheritedStore
     ? mergeAuthProfileStores(params.inheritedStore, persisted ?? emptyStore())
     : persisted;
@@ -385,7 +400,7 @@ export async function maybeMigrateModelCatalogCredentials(params: {
   let removed = 0;
   for (const { description, ...target } of migrationTargets()) {
     try {
-      const result = await persistCredentials({ ...target, stateDir });
+      const result = await persistCredentials({ ...target, env, stateDir });
       migrated += result.migrated;
       removed += result.removed;
     } catch (error) {

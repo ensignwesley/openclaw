@@ -269,6 +269,147 @@ describe("doctor model catalog credential migration", () => {
     expect(loadPersistedSharedAuthProfileStore(state.env)).toBeNull();
   });
 
+  it.each(["api_key", "token"] as const)(
+    "does not import generated plaintext beside a canonical %s SecretRef",
+    async (type) => {
+      const state = createState();
+      const reference = { source: "env" as const, id: "FIXTURE_CUSTOM_KEY" };
+      const canonical =
+        type === "api_key"
+          ? { type, provider: "custom", keyRef: reference }
+          : { type, provider: "custom", tokenRef: reference };
+      saveAuthProfileStore(
+        { version: 1, profiles: { "custom:default": canonical } },
+        state.agentDir,
+      );
+      fs.writeFileSync(
+        path.join(state.agentDir, "models.json"),
+        JSON.stringify({ providers: { custom: provider("stale-generated-key") } }),
+      );
+
+      expect(await maybeMigrateModelCatalogCredentials(migrationParams(state, {}))).toEqual({
+        detected: 0,
+        migrated: 0,
+        removed: 0,
+        warnings: [],
+      });
+      const profiles = loadPersistedSharedAuthProfileStore(state.env)?.profiles;
+      expect(Object.keys(profiles ?? {})).toEqual(["custom:default"]);
+      expect(profiles?.["custom:default"]).toMatchObject(canonical);
+    },
+  );
+
+  it("does not import a child catalog key beside an inherited SecretRef", async () => {
+    const state = createState();
+    const childDir = path.join(state.stateDir, "agents", "helper", "agent");
+    fs.mkdirSync(childDir, { recursive: true });
+    const canonical = {
+      type: "api_key" as const,
+      provider: "custom",
+      keyRef: { source: "env" as const, id: "FIXTURE_CUSTOM_KEY" },
+    };
+    saveAuthProfileStore({ version: 1, profiles: { "custom:default": canonical } }, state.agentDir);
+    fs.writeFileSync(
+      path.join(childDir, "models.json"),
+      JSON.stringify({ providers: { custom: provider("stale-generated-key") } }),
+    );
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: { agentDir: state.agentDir }, helper: { agentDir: childDir } },
+      },
+    };
+
+    expect(await maybeMigrateModelCatalogCredentials(migrationParams(state, cfg))).toEqual({
+      detected: 0,
+      migrated: 0,
+      removed: 0,
+      warnings: [],
+    });
+    expect(loadPersistedAuthProfileStore(childDir)).toBeNull();
+  });
+
+  it("rechecks canonical references after confirmation before importing plaintext", async () => {
+    const state = createState();
+    fs.writeFileSync(
+      path.join(state.agentDir, "models.json"),
+      JSON.stringify({ providers: { custom: provider("stale-generated-key") } }),
+    );
+    const canonical = {
+      type: "api_key" as const,
+      provider: "custom",
+      keyRef: { source: "env" as const, id: "FIXTURE_CUSTOM_KEY" },
+    };
+    const params = migrationParams(state, {});
+    params.prompter = {
+      ...createDoctorPrompter({ runtime: params.runtime, options: {} }),
+      shouldRepair: false,
+      confirmAutoFix: async () => {
+        saveAuthProfileStore(
+          { version: 1, profiles: { "custom:default": canonical } },
+          state.agentDir,
+        );
+        return true;
+      },
+    };
+
+    expect(await maybeMigrateModelCatalogCredentials(params)).toEqual({
+      detected: 1,
+      migrated: 0,
+      removed: 0,
+      warnings: [],
+    });
+    const profiles = loadPersistedSharedAuthProfileStore(state.env)?.profiles;
+    expect(Object.keys(profiles ?? {})).toEqual(["custom:default"]);
+    expect(profiles?.["custom:default"]).toMatchObject(canonical);
+  });
+
+  it("rechecks a relocated inherited shared SecretRef before child import", async () => {
+    const state = createState();
+    const sharedDir = path.join(state.stateDir, "relocated-main");
+    const childDir = path.join(state.stateDir, "agents", "helper", "agent");
+    fs.mkdirSync(sharedDir, { recursive: true });
+    fs.mkdirSync(childDir, { recursive: true });
+    state.env.OPENCLAW_AGENT_DIR = sharedDir;
+    fs.writeFileSync(
+      path.join(childDir, "models.json"),
+      JSON.stringify({ providers: { custom: provider("stale-generated-key") } }),
+    );
+    const canonical = {
+      type: "api_key" as const,
+      provider: "custom",
+      keyRef: { source: "env" as const, id: "FIXTURE_CUSTOM_KEY" },
+    };
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: { agentDir: sharedDir }, helper: { agentDir: childDir } },
+      },
+    };
+    const params = migrationParams(state, cfg);
+    params.prompter = {
+      ...createDoctorPrompter({ runtime: params.runtime, options: {} }),
+      shouldRepair: false,
+      confirmAutoFix: async () => {
+        saveAuthProfileStore({ version: 1, profiles: { "custom:default": canonical } }, sharedDir);
+        return true;
+      },
+    };
+
+    expect(await maybeMigrateModelCatalogCredentials(params)).toEqual({
+      detected: 1,
+      migrated: 0,
+      removed: 0,
+      warnings: [],
+    });
+    expect(loadPersistedAuthProfileStore(childDir)).toBeNull();
+    expect(
+      loadPersistedSharedAuthProfileStore(state.env)?.profiles["custom:default"],
+    ).toMatchObject(canonical);
+  });
+
   it("refuses to overwrite an unreadable canonical auth store", async () => {
     const state = createState();
     const { agentDir } = state;
