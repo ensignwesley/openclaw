@@ -12,6 +12,7 @@ import { writePersistedInstalledPluginIndex } from "../../plugins/installed-plug
 import { loadInstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { projectPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { writeRegistryPackagePlugin } from "../../plugins/test-helpers/plugin-registry-snapshot.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -163,6 +164,44 @@ it.each(["standalone", "gateway"])(
     await assertInventory("successor", "Original");
   },
 );
+
+it("keeps plugin skills published when worker input receives a partial metadata projection", async () => {
+  const root = temporary.make("skills-scan-partial-inventory-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+  pinConfigDir();
+  const workspaceDir = path.join(root, "workspace");
+  const pluginRoot = path.join(root, "plugin");
+  const pluginSkillsDir = path.join(root, "plugin-skills");
+  const skillDir = path.join(pluginRoot, "skills", "helper");
+  await writeSkill({ dir: skillDir, name: "helper", description: "Helper" });
+  const config: OpenClawConfig = {
+    plugins: { entries: { provider: { enabled: true }, helper: { enabled: true } } },
+  };
+  const full = createPluginMetadataSnapshotFixture({
+    plugins: [
+      { id: "provider", origin: "config", rootDir: pluginRoot, skills: [] },
+      { id: "helper", origin: "config", rootDir: pluginRoot, skills: ["skills"] },
+    ],
+  });
+  const options = { config, pluginSkillsDir, pluginMetadataSnapshot: full };
+  const initial = await worker({
+    kind: "plan",
+    input: captureSkillsSourcePlanInput(workspaceDir, options),
+  });
+  expect(initial.kind).toBe("plan");
+  expect(await fs.readlink(path.join(pluginSkillsDir, "helper"))).toBe(skillDir);
+
+  const partial = projectPluginMetadataSnapshot(full, ["provider"]);
+  const input = captureSkillsSourcePlanInput(workspaceDir, {
+    ...options,
+    pluginMetadataSnapshot: partial,
+  });
+  expect(input.pluginContributions?.map((record) => record.id)).toEqual(["helper"]);
+  const continued = await worker({ kind: "plan", input });
+  expect(continued.kind).toBe("plan");
+  expect(await fs.readlink(path.join(pluginSkillsDir, "helper"))).toBe(skillDir);
+});
 
 it("reads shared skill roots once per scan while retaining workspace entries and fresh content", async () => {
   const root = temporary.make("skills-scan-shared-roots-");

@@ -36,12 +36,15 @@ export function captureSkillsSourcePlanInput(
       pluginSkillsDir: options.pluginSkillsDir,
     },
     acpRuntimeAvailable,
-    ...(pluginMetadataSnapshot
+    ...(pluginMetadataSnapshot &&
+    !options.workspaceOnly &&
+    options.config?.plugins?.enabled !== false
       ? {
           pluginContributions: capturePluginSkillContributions({
             metadataSnapshot: pluginMetadataSnapshot,
             config: options.config,
             acpRuntimeAvailable,
+            workspaceDir,
           }),
         }
       : {}),

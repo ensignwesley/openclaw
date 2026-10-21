@@ -17,8 +17,9 @@ import type {
 } from "../../plugins/manifest-registry.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { resolvePluginSkillRoots } from "./plugin-skills.js";
+import { resolvePluginSkillRoots, resolvePluginSkillRootsFromMetadata } from "./plugin-skills.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
 const hoisted = vi.hoisted(() => {
@@ -37,11 +38,13 @@ const hoisted = vi.hoisted(() => {
   const resolvePluginMetadataSnapshot = vi.fn((params: unknown) =>
     loadPluginMetadataSnapshot(params),
   );
+  const completePluginMetadataSnapshot = vi.fn(({ snapshot }: { snapshot: unknown }) => snapshot);
   return {
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
     loadPluginMetadataSnapshot,
     resolvePluginMetadataSnapshot,
+    completePluginMetadataSnapshot,
     loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
   };
 });
@@ -58,6 +61,7 @@ vi.mock("../../plugins/plugin-registry.js", () => ({
 vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: hoisted.loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: hoisted.resolvePluginMetadataSnapshot,
+  completePluginMetadataSnapshot: hoisted.completePluginMetadataSnapshot,
 }));
 
 const tempDirs = createTrackedTempDirs();
@@ -170,6 +174,8 @@ afterEach(async () => {
   hoisted.loadPluginManifestRegistryForInstalledIndex.mockReset();
   hoisted.loadPluginMetadataSnapshot.mockClear();
   hoisted.resolvePluginMetadataSnapshot.mockClear();
+  hoisted.completePluginMetadataSnapshot.mockReset();
+  hoisted.completePluginMetadataSnapshot.mockImplementation(({ snapshot }) => snapshot);
   hoisted.loadPluginRegistrySnapshot.mockReset();
   acpRuntimeTesting.resetAcpRuntimeBackendsForTests();
   await tempDirs.cleanup();
@@ -179,6 +185,62 @@ describe("resolvePluginSkillRoots", () => {
   beforeEach(() => {
     register();
     hoisted.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+  });
+
+  it("completes a partial provider view before publishing plugin skills", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-workspace-");
+    const pluginRoot = await tempDirs.make("openclaw-plugin-");
+    const pluginSkillsDir = await tempDirs.make("managed-plugin-skills-");
+    const skillDir = path.join(pluginRoot, "skills", "helper");
+    await writeRawSkill(skillDir, "---\nname: helper\ndescription: Helper\n---\n");
+    const provider = makePlugin(pluginRoot, { id: "provider", skills: [] });
+    const helper = makePlugin(pluginRoot);
+    const partial = {
+      pluginIds: ["provider"],
+      manifestRegistry: { diagnostics: [], plugins: [provider] },
+      normalizePluginId: (id: string) => id,
+    };
+    const complete = {
+      manifestRegistry: { diagnostics: [], plugins: [provider, helper] },
+      normalizePluginId: partial.normalizePluginId,
+    };
+    hoisted.completePluginMetadataSnapshot.mockReturnValueOnce(complete);
+
+    const roots = resolvePluginSkillRootsFromMetadata({
+      workspaceDir,
+      config: enabledConfig("provider", "helper"),
+      pluginSkillsDir,
+      metadataSnapshot: partial as PluginMetadataSnapshot,
+    });
+
+    expect(roots.map((root) => root.dir)).toEqual([path.join(pluginRoot, "skills")]);
+    expect(await fs.readlink(path.join(pluginSkillsDir, "helper"))).toBe(skillDir);
+    expect(hoisted.completePluginMetadataSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ snapshot: partial, workspaceDir }),
+    );
+  });
+
+  it("leaves published links alone when a partial view cannot be completed", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-workspace-");
+    const pluginRoot = await tempDirs.make("openclaw-plugin-");
+    const pluginSkillsDir = await tempDirs.make("managed-plugin-skills-");
+    const skillDir = path.join(pluginRoot, "skills", "helper");
+    await writeRawSkill(skillDir, "---\nname: helper\ndescription: Helper\n---\n");
+    registerPlugin(pluginRoot);
+    const config = enabledConfig("helper");
+    resolvePluginSkillRoots({ workspaceDir, config, pluginSkillsDir });
+    expect(await fs.readlink(path.join(pluginSkillsDir, "helper"))).toBe(skillDir);
+    hoisted.completePluginMetadataSnapshot.mockReturnValueOnce(undefined);
+
+    expect(() =>
+      resolvePluginSkillRootsFromMetadata({
+        workspaceDir,
+        config,
+        pluginSkillsDir,
+        metadataSnapshot: { pluginIds: ["provider"] } as PluginMetadataSnapshot,
+      }),
+    ).toThrow("Plugin skill discovery requires complete plugin metadata");
+    expect(await fs.readlink(path.join(pluginSkillsDir, "helper"))).toBe(skillDir);
   });
 
   it("keeps package skill targets stable across config changes while publishing live selection", async () => {

@@ -14,7 +14,10 @@ import {
 } from "../../plugins/plugin-cache-files.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
-import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import {
+  completePluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
+} from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { iteratePluginRootContributions } from "../../plugins/plugin-root-contributions.js";
 import { isPathInside } from "../../security/scan-paths.js";
@@ -85,7 +88,7 @@ function resolvePluginSkillRootsInOwner(
     return [];
   }
   return resolvePluginSkillRootsFromContributions({
-    contributions: capturePluginSkillContributions(params),
+    contributions: capturePluginSkillContributions({ ...params, workspaceDir }),
     pluginSkillsDir: params.pluginSkillsDir,
   });
 }
@@ -95,12 +98,22 @@ export function capturePluginSkillContributions(params: {
   config?: OpenClawConfig;
   metadataSnapshot: PluginMetadataSnapshot;
   acpRuntimeAvailable?: boolean;
+  workspaceDir?: string;
 }): PluginSkillContribution[] {
   const config = params.config ?? {};
+  const metadataSnapshot = completePluginMetadataSnapshot({
+    snapshot: params.metadataSnapshot,
+    config,
+    env: process.env,
+    workspaceDir: params.workspaceDir,
+  });
+  if (!metadataSnapshot || metadataSnapshot.pluginIds !== undefined) {
+    throw new Error("Plugin skill discovery requires complete plugin metadata");
+  }
   const acpRuntimeAvailable = params.acpRuntimeAvailable ?? isAcpRuntimeSpawnAvailable({ config });
   return [
     ...iteratePluginRootContributions({
-      metadataSnapshot: params.metadataSnapshot,
+      metadataSnapshot,
       config,
       contribution: "skills",
       isAvailable: (candidate) => acpRuntimeAvailable || candidate.id !== "acpx",
