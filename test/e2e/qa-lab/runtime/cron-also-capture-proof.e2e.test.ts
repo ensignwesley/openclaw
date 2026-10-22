@@ -330,7 +330,7 @@ it(
         jobId = created.id;
         await turn(ordinary.client, "ORDINARY_EDIT");
         const ordinaryOutcome = toolOutcomes.get("ORDINARY_EDIT") ?? "";
-        expect(ordinaryOutcome).toContain("agentId cannot be changed by caller scope");
+        expect(ordinaryOutcome).toContain("automations needs the owner's authority");
         const afterOrdinary = await admin.client.request<{ agentId?: string }>("cron.get", {
           id: jobId,
         });
@@ -338,14 +338,14 @@ it(
 
         await turn(admin.client, "ADMIN_EDIT");
         const adminOutcome = toolOutcomes.get("ADMIN_EDIT") ?? "";
-        expect(adminOutcome).not.toContain("agentId cannot be changed by caller scope");
+        expect(adminOutcome).not.toContain("automations needs the owner's authority");
         const afterAdmin = await admin.client.request<{ agentId?: string }>("cron.get", {
           id: jobId,
         });
         expect(afterAdmin.agentId).toBeUndefined();
         await fs.writeFile(
           path.join(artifactDir, "authority.txt"),
-          "ordinary: agentId cannot be changed by caller scope\nadmin-also: agentId clear succeeded\n",
+          "ordinary: owner-authority guard denied edit; agentId stayed main\nadmin-also: agentId clear succeeded\n",
         );
       },
       async () => {
