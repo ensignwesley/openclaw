@@ -78,6 +78,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
     | "sessionId"
     | "sessionKey"
     | "skipPreparedUserTurnMessage"
+    | "suppressNextUserMessagePersistence"
     | "userTurnTranscriptRecorder"
   >;
   registration?: ActiveEmbeddedRunAttachment;
@@ -287,7 +288,9 @@ export async function submitEmbeddedAttemptPrompt(input: {
 
   // An internal prompt has no transcript recorder to capture a model-facing projection,
   // so it is submitted and persisted as the exact text the model receives.
-  const internalPrompt = attempt.skipPreparedUserTurnMessage === true;
+  const internalPrompt =
+    attempt.skipPreparedUserTurnMessage === true ||
+    (attempt.suppressNextUserMessagePersistence === true && userTurnRecorder === undefined);
   const submittedPrompt = internalPrompt
     ? resolveModelPromptText({ ...input, text: input.transcriptPrompt })
     : input.transcriptPrompt;
