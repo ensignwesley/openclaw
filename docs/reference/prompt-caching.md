@@ -63,6 +63,11 @@ Isolated settled-turn finalization uses a separate cache key scoped to the run.
 Its tool-free prompt and full transcript differ from the conversation request,
 so it does not replace the conversation's cache or history-diagnostic baseline.
 
+Live embedded turns carry watched-group membership and titles beside the current
+turn instead of rebuilding the system suffix. Routes that retain runtime context
+replay earlier snapshots unchanged. The watch registry and existing read-access
+gates still determine what the model may see; a watch never grants send access.
+
 ## Keep replayed tool results stable
 
 OpenClaw applies the same tool-result text cap before the first model request
@@ -236,7 +241,7 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 - Cache hits surface via `usage.prompt_tokens_details.cached_tokens` (Chat Completions) or `input_tokens_details.cached_tokens` (Responses API), mapped to `cacheRead`.
 - Responses API payloads can also expose `input_tokens_details.cache_write_tokens`, mapped to `cacheWrite` and priced at the model's cache-write rate; Responses payloads that omit the field keep `cacheWrite` at `0`. Chat Completions payloads that include `prompt_tokens_details.cache_write_tokens` also populate `cacheWrite`; availability depends on the model and route.
 - Captured consecutive Responses request bodies retained byte-identical history prefixes, so history rewriting did not explain the observed shortfall. Provider breakpoint placement can affect reported `cacheRead`: OpenAI documents message-end breakpoints for GPT-5.6 and later on the Platform API, while the ChatGPT-backed Responses route was observed to report hits in 1,024-token steps. See [OpenAI live expectations](#openai-live-expectations) below.
-- On Responses routes the whole system prompt, including the volatile suffix below the cache boundary, is sent as `instructions`. A suffix change (date rollover, timezone, elevated level, watched sessions, model identity, Project Memory facts) re-caches from the changed point on the next request; the stable prefix and tools are not split into a separate cached block the way Anthropic checkpoints are. Cache observations report this as a `systemPromptSuffix` change.
+- On Responses routes the whole system prompt, including the volatile suffix below the cache boundary, is sent as `instructions`. A suffix change (date rollover, timezone, elevated level, model identity, Project Memory facts) re-caches from the changed point on the next request; the stable prefix and tools are not split into a separate cached block the way Anthropic checkpoints are. Cache observations report this as a `systemPromptSuffix` change.
 
 ### OpenAI 12-hour cache lifetime
 
