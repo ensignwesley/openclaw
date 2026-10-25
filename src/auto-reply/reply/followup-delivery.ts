@@ -519,7 +519,8 @@ export async function deliverFollowupDecision(params: {
     return { kind: "completed", payloads: [] };
   }
   const deliverQueuedBatch = sourceDisposition?.deliver;
-  if (turn.queued.run.internalEventExecution) {
+  const internalEvent = turn.queued.run.internalEventExecution;
+  if (internalEvent || deliverQueuedBatch?.ownsCompletion?.(originatingChannel)) {
     if (!deliverQueuedBatch) {
       throw new Error("Internal event lost its originating delivery owner");
     }

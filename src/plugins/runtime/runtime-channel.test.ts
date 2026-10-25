@@ -3,10 +3,21 @@ import { describe, expect, it, vi } from "vitest";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { PluginInstance } from "../plugin-instance.js";
+import { createEmptyPluginRegistry } from "../registry-empty.js";
+import { createPluginRecord } from "../status.test-helpers.js";
 import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
 
-const dispatchRoutedChannelTurn = vi.hoisted(() => vi.fn(async () => ({ status: "handled" })));
+const dispatchRoutedChannelTurn = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _turn: Parameters<
+        typeof import("../../channels/turn/lifecycle.js").dispatchRoutedChannelTurn
+      >[0],
+    ) => ({ status: "handled" }),
+  ),
+);
 
 vi.mock("../../channels/turn/lifecycle.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../channels/turn/lifecycle.js")>()),
@@ -61,6 +72,55 @@ describe("inbound dispatch", () => {
       expect.objectContaining({ replyOptions: { disableTools: true } }),
     );
     expect(replyOptions.onReplyOperationOwned).toBe(callback);
+  });
+
+  it("keeps queued source callbacks live until queue settlement, then revokes them", async () => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "queued-channel" });
+    registry.plugins.push(record);
+    const owner = new PluginInstance("queued-channel", { record, registry });
+    const channel = createRuntimeChannel();
+    let settle: (() => void | Promise<void>) | undefined;
+    const delivered = vi.fn();
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (turn) => {
+      turn.replyOptions?.turnAdoptionLifecycle?.onDeferred?.();
+      return { status: "handled" };
+    });
+    try {
+      await owner.run(() =>
+        channel.inbound.dispatch({
+          cfg: {},
+          channel: "queued-channel",
+          route: { agentId: "main", sessionKey: "agent:main:queued-channel:direct:test" },
+          ctxPayload: { Body: "test", CommandAuthorized: false },
+          delivery: { deliver: async () => undefined },
+          replyOptions: { onQueuedFollowupReplyBatch: delivered },
+        }),
+      );
+      const queued = dispatchRoutedChannelTurn.mock.calls.at(-1)?.[0];
+      if (!queued) {
+        throw new Error("Dispatch did not retain the queued source");
+      }
+      settle = queued.replyOptions?.turnAdoptionLifecycle?.onSettled;
+      expect(owner.hasRetainedConsumers).toBe(true);
+      const deliver = queued.replyOptions?.onQueuedFollowupReplyBatch;
+      const batch = {
+        kind: "queued-followup" as const,
+        runId: "queued-run",
+        originatingChannel: "queued-channel",
+        payloads: [{ text: "answer" }],
+        completion: { kind: "completed" as const },
+      };
+      await deliver?.(batch);
+      expect(delivered).toHaveBeenCalledExactlyOnceWith(batch);
+      await settle?.();
+      expect(owner.hasRetainedConsumers).toBe(false);
+      expect(() => deliver?.(batch)).toThrow("consumer is closed");
+      settle = undefined;
+    } finally {
+      await settle?.();
+      await owner.dispose();
+    }
   });
 
   it.each([true, false])("inbound preserves dispatch precedence (bound=%s)", async (bound) => {

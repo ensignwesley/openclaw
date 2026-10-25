@@ -1,7 +1,9 @@
 import { createChannelInboundEnvelopeBuilderAsync } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
+import { filterA2aReplyPayload } from "./reply-payload.js";
 import type { A2aTaskStore } from "./task-store.js";
 import type { ResolvedA2aChannelAccount } from "./types.js";
 
@@ -99,6 +101,27 @@ export async function dispatchA2aInbound(params: {
     extra: { CommandInterpretationSuppressed: true },
   });
 
+  // A queued turn outlives dispatch and must retain its own task identity instead
+  // of routing the answer as a new outbound peer message.
+  const deliverQueuedReply: NonNullable<GetReplyOptions["onQueuedFollowupReplyBatch"]> = (
+    batch,
+  ) => {
+    if (batch.completion.kind === "progress") {
+      return;
+    }
+    if (batch.completion.kind !== "completed") {
+      params.store.fail(params.taskId, `Agent run ${batch.completion.kind}`);
+      return;
+    }
+    const text = batch.payloads
+      .filter((payload) => filterA2aReplyPayload(payload) !== null)
+      .map((payload) => payload.text)
+      .filter(Boolean)
+      .join("\n\n");
+    params.store.complete(params.taskId, text);
+  };
+  deliverQueuedReply.ownsCompletion = (channel) => channel === "a2a";
+
   const dispatch = await params.channelRuntime.inbound.dispatch({
     cfg: params.config,
     channel: "a2a",
@@ -119,6 +142,7 @@ export async function dispatchA2aInbound(params: {
     // starts a separate outbound message without that task correlation.
     replyOptions: {
       sourceReplyDeliveryMode: "automatic",
+      onQueuedFollowupReplyBatch: deliverQueuedReply,
       onAgentRunTerminalOutcome: (outcome) => {
         if (outcome === "failed") {
           params.store.fail(params.taskId, "Agent run failed");
