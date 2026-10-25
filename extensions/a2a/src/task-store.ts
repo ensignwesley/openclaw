@@ -214,19 +214,40 @@ export class A2aTaskStore {
     // keys in finish order without changing the original completion time.
     this.#lastFinishKey = Math.max(finishedAt, this.#lastFinishKey + 1);
     const key = `${String(this.#lastFinishKey).padStart(16, "0")}:${task.id}`;
-    // Retain a failed acknowledgement too: it may have committed. Never replace
-    // that result with a synthetic failure when dispatch or shutdown catches it.
+    // Unknown acknowledgements may have committed; retain their rejection so
+    // dispatch/shutdown cannot overwrite a possibly durable answer.
     const write = (async () => {
-      await this.terminalStore.register(
-        key,
-        {
-          task: terminal,
-          ownerPeer: this.#taskOwners.get(task.id)!,
-          messageKey: this.#taskMessageKeys.get(task.id)!,
-          finishedAt,
-        },
-        { ttlMs: Math.max(1, finishedAt + A2A_TERMINAL_RETENTION_MS - Date.now()) },
-      );
+      try {
+        await this.terminalStore.register(
+          key,
+          {
+            task: terminal,
+            ownerPeer: this.#taskOwners.get(task.id)!,
+            messageKey: this.#taskMessageKeys.get(task.id)!,
+            finishedAt,
+          },
+          { ttlMs: Math.max(1, finishedAt + A2A_TERMINAL_RETENTION_MS - Date.now()) },
+        );
+      } catch (error) {
+        if (
+          !(error instanceof Error) ||
+          !("code" in error) ||
+          (error.code !== "PLUGIN_STATE_LIMIT_EXCEEDED" &&
+            error.code !== "PLUGIN_STATE_INVALID_INPUT")
+        ) {
+          throw error;
+        }
+        // These errors prove the write was refused, not ambiguously committed.
+        // Even an oversized deduplication key must leave an observable outcome.
+        terminal.status = {
+          state: "TASK_STATE_FAILED",
+          timestamp: new Date().toISOString(),
+          message: createStatusMessage(
+            task.contextId,
+            `A2A terminal result could not be stored; it will not survive a Gateway restart (${error.code})`,
+          ),
+        };
+      }
       Object.assign(task, terminal);
       this.#terminalTasks.set(task.id, finishedAt);
       const waiters = this.#waiters.get(task.id);
