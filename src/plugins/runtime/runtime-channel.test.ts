@@ -74,6 +74,37 @@ describe("inbound dispatch", () => {
     expect(replyOptions.onReplyOperationOwned).toBe(callback);
   });
 
+  it("keeps immediate delivery live after source settlement until dispatch returns", async () => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "immediate-channel" });
+    registry.plugins.push(record);
+    const owner = new PluginInstance("immediate-channel", { record, registry });
+    const channel = createRuntimeChannel();
+    const delivered = vi.fn();
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (turn) => {
+      // Immediate execution settles its source before the dispatcher sends its final.
+      await turn.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
+      await turn.delivery.deliver?.({ text: "immediate answer" }, { kind: "final" });
+      return { status: "handled" };
+    });
+    try {
+      await owner.run(() =>
+        channel.inbound.dispatch({
+          cfg: {},
+          channel: "immediate-channel",
+          route: { agentId: "main", sessionKey: "agent:main:immediate-channel:direct:test" },
+          ctxPayload: { Body: "test", CommandAuthorized: false },
+          delivery: { deliver: delivered },
+          replyOptions: { onQueuedFollowupReplyBatch: () => undefined },
+        }),
+      );
+      expect(delivered).toHaveBeenCalledWith({ text: "immediate answer" }, { kind: "final" });
+      expect(owner.hasRetainedConsumers).toBe(false);
+    } finally {
+      await owner.dispose();
+    }
+  });
+
   it("keeps queued source callbacks live until queue settlement, then revokes them", async () => {
     const registry = createEmptyPluginRegistry();
     const record = createPluginRecord({ id: "queued-channel" });

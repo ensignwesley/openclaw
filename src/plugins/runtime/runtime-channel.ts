@@ -167,7 +167,9 @@ function bindChannelDelivery<
         try {
           await source?.onSettled?.();
         } finally {
-          consumer.release();
+          if (custody.deferred) {
+            consumer.release();
+          }
         }
       },
     };
