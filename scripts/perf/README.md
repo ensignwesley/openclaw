@@ -4613,6 +4613,17 @@ For concurrent comparisons, pass the same future Unix millisecond timestamp with
 `--start-at` to both processes. They wait after warmup and explicit GC; a missed
 start deadline fails the run. The report records the actual measured start time.
 
+For the 10,800-row selection comparison, add `--team-shape --iterations 720`.
+This uses 4,300 subagents, 4,400 archived dashboards, 400 open dashboards, and
+1,700 other sessions, including global/unknown sentinels. It adds involving-me,
+owner-first, and owner-count requests to the three visibility scopes. Use
+`--reference-only` to isolate reference resolution over prepared visible identities,
+or `--selection` for complete page selection and facets. Compare each mode's golden
+outputs between revisions. Run `--mode timing` separately from the default
+`--mode allocation` so CPU comparisons exclude allocation-sampler overhead.
+These owner probes exclude transport and full row presentation; use the Team-shape
+stress harness for those boundaries and its populated subagent registry.
+
 For long RPC allocation windows, use `--warmup-operations` to warm fewer requests
 than the measured `--operations` count. For example, `--scenario sessions.list
 --warmup-operations 25000 --operations 100000 --rounds 1 --allocations --trace-gc
@@ -4802,6 +4813,33 @@ it does not add a product configuration option or a production probe hook.
 Preserve the exact instrumentation patch and compiled build identity. Validate
 all source anchors again when rebasing. Never apply this instrumenter to an
 operator checkout or ship the instrumented build.
+
+Each measured wave also reports `materializationWork` from the production
+session-row work counters: `created` is first construction, `reused` constructs
+and then retains the old graph, `rebuilt` replaces an existing graph, and `skipped`
+retains the old graph without constructing a replacement. Reuse among repeated
+attempts is `(reused + skipped) / (reused + skipped + rebuilt)`; exclude first
+constructions and report an empty denominator as no attempts. `deepComparisons`
+counts whole-materialization comparisons, not individual input-field checks or
+diagnostic sampling. Existing diagnostic memory snapshots include these counters
+and first differing source-field counts sampled on one in 64 rebuilds. The
+`row-or-membership` bucket means source fields were equal; it does not imply the
+materialized row was equal. No values or session identities are sampled.
+
+For a separate development Gateway diagnostic through ordinary WebSocket RPCs:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/session-row-materialization-measure.ts \
+  --root /path/to/new-synthetic-state --port 62689 --sessions 32 --lists 100
+```
+
+This launches an isolated source Gateway, waits for admission readiness, and
+reports ordinary reads, cron rename/enable/disable, a changed label, and a repeated
+save of that label. The repeat save may still change persisted metadata. Asserted
+automation and label changes guard against stale reuse. Main CPU per list includes
+the phase's mutation and background work, but excludes the controller process;
+it is not exclusive RPC CPU. Apply the same host isolation, quiet slot and guard
+rules as the compiled diagnostic. Preserve failed setup separately from samples.
 
 ```sh
 node --enable-source-maps --import ./scripts/tsx.mjs \
