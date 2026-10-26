@@ -1,4 +1,4 @@
-import { createMemo, Errored, Loading, Show, For } from "solid-js";
+import { action, createMemo, createOptimistic, Errored, Loading, Show, For } from "solid-js";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import {
   normalizeCatalogOpenTarget,
@@ -6,8 +6,9 @@ import {
   normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
-} from "../../app/settings.ts";
+} from "../../app/settings-contract.ts";
 import { Picker } from "../../components/select-picker.ts";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsDefaultDescription,
   SettingsRow,
@@ -94,7 +95,16 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
   const title = createMemo(() => t(`chat.composer.${props.kind}Input`));
   const onSelect = () =>
     props.kind === "microphone" ? props.config.onMicrophoneSelect : props.config.onCameraSelect;
-  const selectedDeviceId = createMemo(() => state()?.selectedDeviceId.trim() ?? "");
+  const [selectedDeviceId, setSelectedDeviceId] = createOptimistic(
+    () => state()?.selectedDeviceId.trim() ?? "",
+  );
+  const [selectingCamera, setSelectingCamera] = createOptimistic(false);
+  const selectCamera = action(function* (deviceId: string, completion: Promise<void> | undefined) {
+    setSelectedDeviceId(deviceId);
+    setSelectingCamera(true);
+    // The retained owner receipt reports errors through the status boundary.
+    yield completion?.catch(() => {});
+  });
   const selectOptions = createMemo(() => {
     const devices = state()?.devices ?? [];
     return [
@@ -134,51 +144,56 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
       ? props.config.onMicrophoneRefresh
       : props.config.onCameraRefresh)?.();
   };
-  const discovery = createMemo(() => ({ promise: state()?.discovery }), {
-    equals: (previous, next) => previous.promise === next.promise,
-  });
-  const discoveryReady = createMemo(async () => {
-    const issue = await discovery().promise;
-    if (issue) {
-      throw new Error(issue);
-    }
-    return true;
-  });
-
+  const discovery = createMemo(
+    () => ({ promise: state()?.discovery, selection: state()?.selection }),
+    {
+      equals: (previous, next) =>
+        previous.promise === next.promise && previous.selection === next.selection,
+    },
+  );
   return (
     <Show when={state() && onSelect()}>
       <SettingsRow
         title={title()}
         description={
           <>
-            {state()?.error ? (
-              <>
-                <span role="alert">{state()?.error}</span>
-                <br />
-              </>
-            ) : (
-              <Errored
-                fallback={(error) => (
-                  <>
-                    <span role="alert">{formatUiError(error())}</span>
-                    <br />
-                  </>
-                )}
-              >
-                <Loading on={discovery().promise} fallback={null}>
-                  {discoveryReady() && state()?.devices.length === 0 && (
-                    <>
-                      {t(
-                        props.kind === "microphone"
-                          ? "chat.composer.noMicrophones"
-                          : "chat.composer.noCameras",
+            <Show when={!selectingCamera()}>
+              <Show when={discovery()} keyed>
+                {(request) => {
+                  const ready = createMemo(async () => {
+                    await request.selection;
+                    const issue = await request.promise;
+                    if (issue) {
+                      throw new Error(issue);
+                    }
+                    return true;
+                  });
+                  return (
+                    <Errored
+                      fallback={(error) => (
+                        <>
+                          <span role="alert">{formatUiError(error())}</span>
+                          <br />
+                        </>
                       )}
-                      <br />
-                    </>
-                  )}
-                </Loading>
-              </Errored>
-            )}
+                    >
+                      <Loading fallback={null}>
+                        {ready() && state()?.devices.length === 0 && (
+                          <>
+                            {t(
+                              props.kind === "microphone"
+                                ? "chat.composer.noMicrophones"
+                                : "chat.composer.noCameras",
+                            )}
+                            <br />
+                          </>
+                        )}
+                      </Loading>
+                    </Errored>
+                  );
+                }}
+              </Show>
+            </Show>
             {t("quickSettings.personal.browserOnly")}
           </>
         }
@@ -199,7 +214,14 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
                 requestAccess();
               }
             }}
-            onChange={(event) => onSelect()?.(event.currentTarget.value)}
+            onChange={(event) => {
+              const deviceId = event.currentTarget.value;
+              if (props.kind === "camera") {
+                void selectCamera(deviceId, props.config.onCameraSelect?.(deviceId));
+              } else {
+                props.config.onMicrophoneSelect?.(deviceId);
+              }
+            }}
           >
             <For each={selectOptions()} keyed={(option) => option.value}>
               {(option) => (
@@ -309,6 +331,8 @@ export function ChatPreferencesSection(props: ConfigProps) {
           setting={"send-shortcut"}
           description={
             <>
+              {t("chat.sendShortcutHint")}
+              <br />
               {sendShortcutDefaultDescription} {sendShortcutProvenance()}
             </>
           }
@@ -337,8 +361,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
           }
           control={
             <>
-              <select
-                class="settings-select"
+              <SettingsSelect
                 data-settings-follow-up-mode
                 aria-label={t("chat.followUpMode")}
                 value={followUpSelection()}
@@ -349,19 +372,15 @@ export function ChatPreferencesSection(props: ConfigProps) {
                       value === "server" ? undefined : normalizeChatFollowUpMode(value),
                   });
                 }}
-              >
-                <option value="server" selected={followUpSelection() === "server"}>
-                  {t("chat.followUpModeServer", {
-                    mode: serverQueueMode(),
-                  })}
-                </option>
-                <option value="steer" selected={followUpSelection() === "steer"}>
-                  {t("chat.followUpModeSteer")}
-                </option>
-                <option value="queue" selected={followUpSelection() === "queue"}>
-                  {t("chat.followUpModeQueue")}
-                </option>
-              </select>
+                options={[
+                  {
+                    value: "server",
+                    label: t("chat.followUpModeServer", { mode: serverQueueMode() }),
+                  },
+                  { value: "steer", label: t("chat.followUpModeSteer") },
+                  { value: "queue", label: t("chat.followUpModeQueue") },
+                ]}
+              />
               {props.chatFollowUpModeOverridden ? (
                 <button
                   type="button"
@@ -427,14 +446,21 @@ export function ChatPreferencesSection(props: ConfigProps) {
     </section>
   );
 }
-export function SidebarPreferencesSection(props: ConfigProps) {
+export function SidebarPreferencesSection(
+  props: ConfigProps & { sectionRef?: (element: HTMLElement) => void },
+) {
   const catalogLabelsScope = createMemo(() => props.hiddenSessionCatalogLabels.scope);
   const hiddenCatalogIds = createMemo(() => [...props.hiddenSessionCatalogIds].toSorted());
   // The delete dialog's "Don't ask me again" writes this off; this row is where
   // the operator turns it back on, so it has to stay next to the session prefs.
 
   return (
-    <section id={APPEARANCE_SETTINGS_TARGET_IDS.sidebar} class="settings-section">
+    <section
+      ref={(element) => props.sectionRef?.(element)}
+      id={APPEARANCE_SETTINGS_TARGET_IDS.sidebar}
+      class="settings-section"
+      onFocusIn={() => props.onAppearanceDataNeeded?.()}
+    >
       <SettingsSectionHeader title={t("configView.sidebarPrefs.title")} />
       <p class="settings-section__desc">{t("configView.sidebarPrefs.hint")}</p>
       <div class="settings-group">

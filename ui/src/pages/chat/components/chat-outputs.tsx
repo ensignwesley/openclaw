@@ -13,57 +13,19 @@ import {
 import type { ArtifactSummary } from "../../../../../packages/gateway-protocol/src/schema/artifacts.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
+import { registerChatOutputsEnglish } from "../../../i18n/locales/en-chat-outputs.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import type { SessionWorkspaceArtifacts } from "./chat-session-workspace-types.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { observeResize } from "../../../lib/reactive/observers.ts";
+import {
+  hasChatDesktopOutputs,
+  type ChatOutputsDashboard,
+  type ChatOutputsDesktopProps,
+  type ChatOutputsProps,
+} from "./chat-outputs-data.ts";
 import "./chat-outputs.css";
 
-type ChatOutputsDashboard = {
-  title: string;
-  onOpen: () => void;
-};
-
-type ChatOutputsData = {
-  /** The complete artifacts.list({ sessionKey, messageRole: "assistant" }) result. */
-  artifacts: readonly ArtifactSummary[] | null;
-  artifactRead?: SessionWorkspaceArtifacts;
-  artifactsError: string | null;
-  /** undefined: not resolved; null: confirmed absent. Not one entry per widget. */
-  dashboard: ChatOutputsDashboard | null | undefined;
-  dashboardError: string | null;
-};
-
-type ChatOutputsProps = ChatOutputsData & {
-  onOpenArtifact: (artifactId: ArtifactSummary["id"]) => void;
-  onRetryArtifacts?: () => void;
-  onRetryDashboard?: () => void;
-  /** Use the original filename when the native owner has it; never infer an extension. */
-  getArtifactName?: (artifact: ArtifactSummary) => string;
-  /** Native icon owner supplies the document/table geometry for this artifact. */
-  renderArtifactIcon: (artifact: ArtifactSummary) => JSX.Element;
-};
-
-export type ChatOutputsDesktopProps = ChatOutputsProps & {
-  /** Select the existing Files catalog, even if a preview is currently active. */
-  onViewAll: () => void;
-  /** The approved Folders glyph, supplied by the shared icon owner. */
-  renderViewAllIcon: () => JSX.Element;
-};
-
-/** Shared by the root entry and its interior; unknown is not a zero count. */
-export function getChatOutputsCount(data: ChatOutputsData): number | null {
-  if (data.artifacts === null || data.dashboard === undefined) {
-    return null;
-  }
-  return data.artifacts.length + (data.dashboard === null ? 0 : 1);
-}
-
-/** Optional desktop sections need content or an actionable read error, not a speculative slot. */
-export function hasChatDesktopOutputs(data: ChatOutputsData): boolean {
-  return Boolean(
-    data.artifacts?.length || data.dashboard || data.artifactsError || data.dashboardError,
-  );
-}
+registerEnglishCatalog(registerChatOutputsEnglish);
 
 function OutputName(props: { text: string }) {
   let viewport!: HTMLSpanElement;
@@ -73,11 +35,9 @@ function OutputName(props: { text: string }) {
       viewport.toggleAttribute("data-overflow", content.scrollWidth > viewport.clientWidth);
     };
     // Observe both boxes: font/text changes can overflow without resizing the row.
-    const observer = new ResizeObserver(measure);
-    observer.observe(viewport);
-    observer.observe(content);
+    const stopResize = observeResize([viewport, content], measure);
     measure();
-    return () => observer.disconnect();
+    return stopResize;
   });
   return (
     <span class="chat-outputs__name" ref={(element) => (viewport = element)}>
@@ -210,13 +170,52 @@ function ArtifactReadSlot(props: {
 }
 
 function DashboardStatus(props: ChatOutputsProps) {
+  const result = createMemo(() => ({ pending: props.dashboardRead }), {
+    equals: (previous, next) => previous.pending === next.pending,
+  });
+  const dashboard = createMemo(() => props.dashboard);
+  const error = createMemo(() => props.dashboardError);
+  const read = createMemo(async () => {
+    const pending = result().pending;
+    const value = dashboard();
+    const failure = error();
+    if (value === undefined && !failure) {
+      await pending;
+    }
+    if (failure) {
+      throw new Error(failure);
+    }
+    return value;
+  });
   return (
-    <OutputReadStatus
-      pending={props.dashboard === undefined && !props.dashboardError}
-      error={props.dashboardError}
-      label={t("outputs.loadingDashboard")}
-      onRetry={props.onRetryDashboard}
-    />
+    <Errored
+      fallback={(failure, reset) => (
+        <OutputReadStatus
+          pending={false}
+          error={formatUiError(failure())}
+          label=""
+          onRetry={
+            props.onRetryDashboard
+              ? () => {
+                  props.onRetryDashboard?.();
+                  reset();
+                }
+              : undefined
+          }
+        />
+      )}
+    >
+      <Loading
+        on={result()}
+        fallback={<OutputReadStatus pending error={null} label={t("outputs.loadingDashboard")} />}
+      >
+        <OutputReadStatus
+          pending={isPending(read) || latest(read) === undefined}
+          error={null}
+          label={t("outputs.loadingDashboard")}
+        />
+      </Loading>
+    </Errored>
   );
 }
 
@@ -293,6 +292,7 @@ export function ChatOutputsMobile(props: ChatOutputsProps) {
               }
             >
               <PanelEmptyState
+                presentation="mobile"
                 icon={<Icon name="fileText" />}
                 heading={t("outputs.emptyTitle")}
                 description={t("outputs.emptyDescription")}

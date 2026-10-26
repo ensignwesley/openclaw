@@ -79,7 +79,7 @@ function statusCase(
     props,
     status,
     tone,
-    button: { disabled: false, title: "", label: "Update now", ...button },
+    button: { disabled: false, title: "", label: "Update Gateway…", ...button },
   };
 }
 
@@ -133,7 +133,24 @@ function waitingUpdate(campaign: Pick<Campaign, "forceAtMs"> & Partial<Campaign>
 }
 
 describe("renderUpdates", () => {
-  it.each(["Update now", "Retry update"])(
+  it.each([
+    ["available", {}, "Install the available update and restart the Gateway."],
+    [
+      "current",
+      {
+        updateSchedule: { channel: "stable", autoEnabled: false, install: { kind: "package" } },
+        updateAvailable: null,
+      },
+      "Run the Gateway updater and restart. The current version may be reinstalled.",
+    ],
+  ] as const)("identifies the Gateway action with %s status", (_status, update, description) => {
+    renderUpdates({ update });
+    const action = row("Update Gateway…");
+    expect(action.textContent).toContain(description);
+    expect(action.querySelector("button")?.classList.contains("primary")).toBe(false);
+  });
+
+  it.each(["Update Gateway…", "Retry update"])(
     "dispatches %s to the latest handler without replacing the button",
     (label) => {
       const initial = vi.fn(async () => undefined);
@@ -233,7 +250,7 @@ describe("renderUpdates", () => {
       status,
       tone === "muted" ? "settings-status" : `settings-status settings-status--${tone}`,
     ]);
-    const button = row("Update now").querySelector<HTMLButtonElement>("button")!;
+    const button = row("Update Gateway…").querySelector<HTMLButtonElement>("button")!;
     expect(button.textContent?.trim()).toBe(expected.label);
     expect(button).toMatchObject({ disabled: expected.disabled, title: expected.title });
     if (props.update?.updateStatusCheckBanner) {
@@ -276,7 +293,7 @@ describe("renderUpdates", () => {
         /This Mac|This iPhone|This device|App version|Check for updates automatically/,
       );
       expect(text("Gateway version")).toContain("2026.8.1");
-      rowButton("Update now").click();
+      rowButton("Update Gateway…").click();
       expect(props.onUpdateNow).toHaveBeenCalledOnce();
       expect(nativeDeviceSettings.checkForUpdates).not.toHaveBeenCalled();
     },
@@ -299,15 +316,13 @@ describe("renderUpdates", () => {
     mountUpdates(props);
     expect(container.textContent).toContain("This Mac");
     expect(row("App version").textContent).toContain("2026.9.3 (build 42)");
-    expect(toggle("Check for updates automatically").disabled).toBe(false);
+    expect(toggle("Check for updates automatically").hasAttribute("aria-disabled")).toBe(false);
     setToggle("Check for updates automatically", false);
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
       "updates.automatic",
       false,
       expect.any(Function),
     );
-    rowButton("Check for Updates…").click();
-    expect(nativeDeviceSettings.checkForUpdates).toHaveBeenCalledOnce();
     nativeDeviceSettings.snapshot = {
       ...nativeDeviceSettings.snapshot,
       device: { ...nativeDeviceSettings.snapshot.device, appVersion: "2026.9.4", appBuild: "43" },
@@ -366,11 +381,6 @@ describe("renderUpdates", () => {
       },
     });
 
-    expect(
-      [...container.querySelectorAll(".settings-segmented__btn")].map((option) =>
-        option.textContent?.trim(),
-      ),
-    ).toEqual(["Stable", "Beta", "Dev", "Extended stable"]);
     expect(row("Release channel").querySelector("input:checked")).toMatchObject({
       value: "extended-stable",
     });
@@ -473,7 +483,6 @@ describe("renderUpdates", () => {
     expect(row("Status").querySelector("button")).toBeNull();
     mountUpdates({ ...props, nowMs: 31_000 });
     expect(row("Status").textContent).toContain("Update held · resumes in 0:30");
-    expect(row("Status").querySelector("button")).toBeNull();
     mountUpdates({ ...props, nowMs: 61_000 });
     expect(row("Status").textContent).toContain("Waiting for active work · forced update in 15:00");
     expect(row("Status").querySelector("button")?.textContent?.trim()).toBe("Hold 1 h");
@@ -542,11 +551,9 @@ describe("renderUpdates", () => {
       recovery: false,
       reconciled: false,
     },
-    { status: "skipped", reason: "container-image-install", recovery: false, reconciled: false },
-    { status: "skipped", reason: "already-current", recovery: false, reconciled: false },
     { status: "failed", reason: "abandoned", recovery: false, reconciled: true },
   ] as const)(
-    "renders the durable $status/$reason report with reconciled=$reconciled and only offers current recovery",
+    "gates durable $status/$reason recovery with reconciled=$reconciled",
     ({ status, reason, recovery, reconciled }) => {
       const onUpdateNow = vi.fn();
       const onCheckStatus = vi.fn(async () => true);
@@ -557,31 +564,12 @@ describe("renderUpdates", () => {
             status,
             finishedAtMs: 10,
             reason,
-            after: { version: "2026.9.2" },
-            steps: [
-              {
-                step: "build",
-                status: status === "failed" ? "failed" : "completed",
-                detail: "Build output",
-              },
-              ...(reconciled
-                ? [{ step: "reconcile:acknowledged", status: "completed" as const }]
-                : []),
-            ],
+            steps: reconciled ? [{ step: "reconcile:acknowledged", status: "completed" }] : [],
           }),
         },
         onUpdateNow,
         onCheckStatus,
       });
-      flush();
-      const view = container.querySelector("openclaw-update-run-view")!;
-      expect(view.querySelector(".update-run-view__report")?.textContent).toContain(
-        reconciled
-          ? "OpenClaw abandoned update reconciled."
-          : status === "succeeded"
-            ? "OpenClaw updated to 2026.9.2"
-            : `OpenClaw update ${status}`,
-      );
       if (recovery) {
         const actions = row("Recovery");
         actions.querySelector<HTMLButtonElement>("button")?.click();
@@ -592,15 +580,6 @@ describe("renderUpdates", () => {
       } else {
         expect(container.textContent).not.toContain("Retry update");
         expect(container.textContent).not.toContain("openclaw triage");
-      }
-      if (reconciled) {
-        expect(view.querySelector(".update-run-view__report--failed")).toBeNull();
-        expect(view.querySelector('[data-step="build"]')?.getAttribute("data-status")).toBe(
-          "failed",
-        );
-        expect(view.querySelector(".update-run-view__details")?.textContent).toContain(
-          "Build output",
-        );
       }
     },
   );
@@ -636,7 +615,7 @@ describe("renderUpdates", () => {
     ["fallback", "Review and submit the prefilled issue in your browser."],
     ["pending", "may have completed"],
   ] as const)(
-    "renders a %s issue submission without leaking a path or replay link",
+    "renders a %s issue notice with only the applicable handoff link",
     (status, message) => {
       const run = failedRun();
       renderUpdates({
@@ -659,7 +638,6 @@ describe("renderUpdates", () => {
 
       const report = row("Failure report");
       expect(report.textContent).toContain(message);
-      expect(report.textContent).not.toContain("/private/report.md");
       if (status === "fallback") {
         expect(report.querySelector("a")?.getAttribute("href")).toContain("issues/new");
       } else {

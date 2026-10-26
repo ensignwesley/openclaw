@@ -36,6 +36,12 @@ import { createSessionsPage, type SessionsPageOwner } from "./sessions-page-stat
 import type { SessionsPageState } from "./sessions-page-state.types.ts";
 import { SessionsPageContent } from "./sessions-page.tsx";
 
+export function createLiveSessionContext(client: GatewayBrowserClient) {
+  const connection = createGateway(client);
+  const sessions = createTestSessionCapability(connection.gateway);
+  return { connection, sessions, context: createContext(connection.gateway, sessions) };
+}
+
 export type TestSessionsPage = HTMLElement &
   SessionsPageOwner["actions"] &
   ReturnType<SessionsPageOwner["view"]> & {
@@ -90,14 +96,9 @@ export async function createPage(
           ]),
         );
       }
-      if (property in owner.actions) {
-        return Reflect.get(owner.actions, property);
-      }
-      if (property in view) {
-        return Reflect.get(view, property);
-      }
-      const value = Reflect.get(target, property, target);
-      return typeof value === "function" ? value.bind(target) : value;
+      const source = property in owner.actions ? owner.actions : property in view ? view : target;
+      const value = Reflect.get(source, property, source);
+      return source === target && typeof value === "function" ? value.bind(target) : value;
     },
     set(target, property, value) {
       if (property === "routeData") {
@@ -140,7 +141,6 @@ export function createGateway(
     client,
     phase: "connected",
     hello: sessionMutationGatewayHello(),
-    assistantAgentId: null,
     sessionKey: "main",
   });
   const setSessionKey = vi.fn();
@@ -271,12 +271,7 @@ export function createContext(
       subscribe,
     },
     channels: { subscribe },
-    runtimeConfig: { state: { configSnapshot: null }, subscribe },
-    plugins: {
-      registrations: vi.fn(() => []),
-      reportError: vi.fn(),
-      subscribe,
-    },
+    plugins: { registrations: vi.fn(() => []), reportError: vi.fn(), subscribe },
     navigate: vi.fn(),
     preload: vi.fn(),
   } as unknown as ApplicationContext;
@@ -288,13 +283,16 @@ export async function createRenderedPage(
   statusFilter: "active" | "archived" | "all" = "active",
   expandedSessionKey: string | null = null,
 ): Promise<TestSessionsPage> {
-  const query = buildSessionsListQuery(context, {
-    limit: 50,
-    includeGlobal: true,
-    includeUnknown: false,
-    statusFilter,
-    deepLinkSessionKey: expandedSessionKey,
-  });
+  const query = buildSessionsListQuery(
+    context.agentSelection.state.scopeId,
+    {
+      limit: "50",
+      includeGlobal: true,
+      includeUnknown: false,
+      statusFilter,
+    },
+    expandedSessionKey,
+  );
   const publish = managedListPublishers.get(context.sessions);
   if (publish) {
     publish(query, { result, agentId: query.agentId ?? null, loading: false, error: null });
@@ -354,4 +352,25 @@ export async function openRowMenu(page: TestSessionsPage, target: GatewaySession
   expect(menu).not.toBeNull();
   await settleSessionMenu(menu);
   return menu;
+}
+
+export function withNotifyingAgentSelection(
+  context: ApplicationContext,
+  initialScopeId: string | null,
+) {
+  const listeners = new Set<() => void>();
+  const state = context.agentSelection.state;
+  state.scopeId = initialScopeId;
+  const changeScope = (scopeId: string | null) => {
+    if (state.scopeId === scopeId) {
+      return;
+    }
+    state.scopeId = scopeId;
+    listeners.forEach((listener) => listener());
+  };
+  Object.assign(context.agentSelection, {
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
+    setScope: changeScope,
+  });
+  return { context, changeScope };
 }

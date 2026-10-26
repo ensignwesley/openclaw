@@ -23,7 +23,7 @@ import {
   type PersistedPluginModelCatalog,
 } from "../agents/plugin-model-catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
+import { applyConfigEnvVars, prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
 import type { ConfigWriteNotification } from "../config/config.js";
 import { applyModelDefaults } from "../config/defaults.js";
 import {
@@ -1246,7 +1246,6 @@ async function withManagedChannelSecretFixture(
       write: async (config) => {
         currentSource = config;
         revision += 1;
-        const application = createRuntimeConfigWriteApplication();
         const notification = createConfigWriteNotification(
           config,
           `hash-${revision}`,
@@ -1257,8 +1256,7 @@ async function withManagedChannelSecretFixture(
         if (!writeListenerRef.current) {
           throw new Error("Expected managed config writer");
         }
-        writeListenerRef.current(attachRuntimeConfigWriteApplication(notification, application));
-        return await application.result;
+        return await publishConfigWrite(writeListenerRef.current, notification);
       },
       failStop: () => {
         rejectStop = true;
@@ -3363,23 +3361,19 @@ describe("gateway Gmail hot reload handlers", () => {
       });
       await reloader.ready;
       const writeConfig = (config: OpenClawConfig, revision: number) => {
-        const application = createRuntimeConfigWriteApplication();
         if (!writeListenerRef.current) {
           throw new Error("Expected managed config writer");
         }
-        writeListenerRef.current(
-          attachRuntimeConfigWriteApplication(
-            createConfigWriteNotification(
-              config,
-              `terminal-disable-${revision}`,
-              revision,
-              `runtime-${revision}`,
-              `source-${revision}`,
-            ),
-            application,
+        return publishConfigWrite(
+          writeListenerRef.current,
+          createConfigWriteNotification(
+            config,
+            `terminal-disable-${revision}`,
+            revision,
+            `runtime-${revision}`,
+            `source-${revision}`,
           ),
         );
-        return application.result;
       };
 
       try {
@@ -4268,11 +4262,11 @@ describe("gateway plugin hot reload handlers", () => {
       ...nextConfig,
       env: initialConfig.env,
     } satisfies OpenClawConfig;
+    applyConfigEnvVars(initialConfig, targetEnv, { lowerPrecedenceEnv: initialConfig.env.vars });
     const runtimeEnv = prepareConfigRuntimeEnv({
       previousConfig: initialConfig,
       nextConfig,
       env: targetEnv,
-      previousOwnedEnv: { [envKey]: "old" },
     });
     const events: string[] = [];
     const rebuiltCronState = makeRebuiltCron({

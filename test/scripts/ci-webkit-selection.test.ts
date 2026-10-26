@@ -11,7 +11,6 @@ describe("Control UI WebKit selection", () => {
     ["ui/src/components/solid/session-hovercard-automations.browser.test.tsx", true],
     ["ui/src/components/session-hovercard.css", true],
     ["ui/src/components/solid/menu.tsx", true],
-    ["ui/src/components/solid/menu-shortcut-alignment.browser.test.tsx", true],
     ["ui/src/components/solid/overlay.css", true],
     ["ui/src/pages/chat/components/chat-composer.tsx", true],
     ["ui/src/pages/chat/chat-pane-header.ts", true],
@@ -68,6 +67,7 @@ describe("Control UI WebKit selection", () => {
       for (const [shard, selected, expected] of [
         [1, "true", true],
         [2, "true", false],
+        [3, "true", false],
         [1, "false", false],
       ] as const) {
         expect(

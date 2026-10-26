@@ -175,7 +175,7 @@ async function withTransport(
 ) {
   // Construct the listener outside the requester's Cron scope.
   if (transport === "cli") {
-    await ensureMcpLoopbackServer(0);
+    await ensureMcpLoopbackServer();
   }
   try {
     await withSuccessor(true, async (_identity, admitted, capability) => {
@@ -436,7 +436,7 @@ describe("requester continuation persisted automation management", () => {
             delivery: { mode: "none" },
           },
         }),
-      ).rejects.toThrow("This turn can only list, get, update, run, or remove automations");
+      ).rejects.toThrow("This turn can only list, get, update, run, remove, or bind automations");
       expect(await fixture.read()).toEqual([]);
     });
   });

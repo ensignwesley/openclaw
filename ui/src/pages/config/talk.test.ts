@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
-import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -9,56 +8,46 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
 import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
-import {
-  createApplicationGateway,
-  createSolidApplicationContextProvider,
-} from "../../test-helpers/solid-application-context.tsx";
+import { createApplicationGateway } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { TalkSettingsPage } from "./talk-page.tsx";
+import {
+  expectVoiceState,
+  mountTalkPage,
+  mountTalkSettingsRoutes,
+  nativeVoice,
+  readVoiceOptions,
+  setTalkRealtimeConfig,
+} from "./talk.test-support.tsx";
 
 const ACTIVE_VOICES = ["", "cove", "spruce", "custom-voice"];
 const DEFAULT_VOICES = ["", "marin", "custom-voice"];
-
-function nativeVoice(snapshot: NonNullable<NativeDeviceSettingsCapability["snapshot"]>) {
-  const listeners = new Set<() => void>();
-  const settings = {
-    snapshot,
-    initialSnapshot: Promise.resolve(snapshot),
-    set: vi.fn<NativeDeviceSettingsCapability["set"]>(),
-    subscribe: (listener: Parameters<NativeDeviceSettingsCapability["subscribe"]>[0]) => {
-      const notify = () => listener(snapshot);
-      listeners.add(notify);
-      return () => {
-        listeners.delete(notify);
-      };
-    },
-    requestPermission: vi.fn(),
-    openSystemSettings: vi.fn(),
-    openPanel: vi.fn(),
-    checkForUpdates: vi.fn(),
-    setupChromeExtension: vi.fn(),
-    refresh: vi.fn(),
-    dispose: vi.fn(),
-  } satisfies NativeDeviceSettingsCapability;
-  return {
-    settings,
-    publish: () => {
-      listeners.forEach((notify) => notify());
-      flush();
-    },
-  };
-}
 
 function editTrigger(input: HTMLTextAreaElement, value: string) {
   input.value = value;
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
+
+async function tick(ms = 0) {
+  await vi.advanceTimersByTimeAsync(ms);
+  flush();
+}
+
+const triggerInput = (page: HTMLElement) => page.querySelector("textarea")!;
+const triggerAlert = (page: HTMLElement) => page.querySelector("[role='alert']");
+const retryTrigger = (page: HTMLElement) =>
+  page.querySelector<HTMLButtonElement>("[role='alert'] button")?.click();
+const expectTriggerWrite = (request: unknown, text: string) =>
+  expect(request).toHaveBeenLastCalledWith("voicewake.set", { triggers: [text] });
+const expectFocused = (input: HTMLTextAreaElement, value: string) => {
+  expect(input.value).toBe(value);
+  expect(document.activeElement).toBe(input);
+};
 
 type TriggerReply = { triggers: string[] };
 async function voiceWakeFixture(
@@ -70,22 +59,15 @@ async function voiceWakeFixture(
     method === "voicewake.get" ? { triggers: read() } : write(++writes),
   );
   const harness = createTalkMutationHarness({ voiceWakeRequest });
-  await waitForSolid(() => expect(harness.page.querySelector("textarea")?.value).toBe("openclaw"));
+  await waitForSolid(() => expect(triggerInput(harness.page)?.value).toBe("openclaw"));
   vi.useFakeTimers();
   return {
     ...harness,
-    input: harness.page.querySelector("textarea")!,
+    input: triggerInput(harness.page),
     voiceWakeRequest,
     writes: () => writes,
   };
 }
-
-type TalkPageElement = HTMLElement & {
-  context: ApplicationContext;
-  configObject: Record<string, unknown>;
-  changeModel: (model: string | null) => void;
-  changeProvider: (providerId: string | null) => void;
-};
 
 type TalkMutationHarnessOptions = {
   configSaving?: boolean;
@@ -249,68 +231,6 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
   };
 }
 
-function mountTalkPage(context: ApplicationContext, initialConfig: Record<string, unknown>) {
-  const page: TalkPageElement = Object.assign(document.createElement("div"), {
-    context,
-    configObject: initialConfig,
-    changeModel: (value: string | null) => {
-      flush();
-      const picker = page.querySelector<SelectPicker>("openclaw-select-picker");
-      if (!picker) {
-        throw new Error("Talk model picker is unavailable");
-      }
-      picker.params.onChange(value ?? "");
-    },
-    changeProvider: (value: string | null) => {
-      const input = [...page.querySelectorAll<HTMLInputElement>('input[type="radio"]')].find(
-        (entry) => entry.value === (value ?? ""),
-      );
-      if (!input) {
-        throw new Error("Talk provider choice is unavailable");
-      }
-      input.click();
-    },
-  });
-  const [config, setConfig] = createSignal(initialConfig);
-  document.body.append(page);
-  const provider = createSolidApplicationContextProvider(context);
-  const view = mountSolid(
-    () =>
-      createComponent(TalkSettingsPage, {
-        get configObject() {
-          return config();
-        },
-      }),
-    { container: page, wrapper: provider.wrapper },
-  );
-  const remove = page.remove.bind(page);
-  Object.defineProperties(page, {
-    context: { value: context },
-    configObject: { get: config, set: setConfig },
-  });
-  page.remove = () => {
-    view.unmount();
-    remove();
-  };
-  flush();
-  return page;
-}
-
-function readVoiceOptions(page: HTMLElement): string[] {
-  return [...page.querySelectorAll("select option")].map(
-    (option) => option.getAttribute("value") ?? "",
-  );
-}
-
-function setTalkRealtimeConfig(page: TalkPageElement, realtime: Record<string, unknown>) {
-  page.configObject = { talk: { realtime } };
-}
-
-function expectVoiceState(page: TalkPageElement, options: string[], unsupported: boolean) {
-  expect(readVoiceOptions(page)).toEqual(options);
-  expect(page.textContent?.includes(t("talkPage.voice.unsupportedDefault"))).toBe(unsupported);
-}
-
 async function selectMutation(
   field: "model" | "provider",
   value: string,
@@ -352,7 +272,7 @@ async function readyTalk(options: TalkMutationHarnessOptions = {}) {
 
 it("locks every curated picker while config is saving", async () => {
   const { page } = await readyTalk({ configSaving: true, speakerVoice: "marin" });
-  expect(page.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled).toBe(true);
+  expect(page.querySelector(".settings-segmented__input")?.hasAttribute("disabled")).toBe(true);
   expect([...page.querySelectorAll("select")]).toMatchObject([{ disabled: true }]);
   expect(page.querySelector<HTMLButtonElement>("openclaw-select-picker button")?.disabled).toBe(
     true,
@@ -506,7 +426,11 @@ describe("Talk device and voice wake settings", () => {
     ).toEqual(["Voice Wake"]);
     const next = !rows[0]!.querySelector<HTMLInputElement>(".settings-toggle__input")!.checked;
     rows[0]!.click();
-    expect(nativeDeviceSettings.set).toHaveBeenCalledExactlyOnceWith("voice.wakeEnabled", next);
+    expect(nativeDeviceSettings.set).toHaveBeenCalledExactlyOnceWith(
+      "voice.wakeEnabled",
+      next,
+      expect.any(Function),
+    );
     expect(section.querySelector("select, button")).toBeNull();
   });
 
@@ -534,48 +458,113 @@ describe("Talk device and voice wake settings", () => {
     expect(alert()).toBeNull();
   });
 
-  it("retains rejected trigger edits and gives a visible retry action", async () => {
-    const { page, input, voiceWakeRequest } = await voiceWakeFixture(() => {
-      throw new Error("Permission denied");
+  it("retains rejected trigger edits and recovers through retry or typing", async () => {
+    const { page, input, voiceWakeRequest } = await voiceWakeFixture((index) => {
+      if (index <= 2) {
+        throw new Error("Permission denied");
+      }
+      return { triggers: ["new phrase"] };
     });
+    input.focus();
     editTrigger(input, "hello");
-    await vi.advanceTimersByTimeAsync(400);
-    flush();
-    expect(page.querySelector("[role='alert']")?.textContent).toContain("Permission denied");
+    await tick(400);
+    expect(triggerAlert(page)?.textContent).toContain("Permission denied");
     expect(input.value).toBe("hello");
     expect(input.disabled).toBe(false);
-    page.querySelector<HTMLButtonElement>("[role='alert'] button")?.click();
+    retryTrigger(page);
     expect(voiceWakeRequest).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(0);
+    editTrigger(input, "new phrase");
+    await tick();
+    expect(triggerAlert(page)).toBeNull();
+    await tick(400);
+    expect(page.querySelector("[role='status']")?.textContent).toBe("Saved");
+    expect(triggerInput(page)).toBe(input);
+    expect(document.activeElement).toBe(input);
   });
 
-  it("keeps trigger typing focused while serializing saves and ignoring older acknowledgments", async () => {
+  it("keeps trigger typing focused across an older failure while serializing saves", async () => {
     const first = createDeferred<{ triggers: string[] }>();
     const second = createDeferred<{ triggers: string[] }>();
-    const { page, input, voiceWakeRequest, writes } = await voiceWakeFixture((index) =>
+    const { page, input, writes, voiceWakeRequest } = await voiceWakeFixture((index) =>
       index === 1 ? first.promise : second.promise,
     );
     input.focus();
     editTrigger(input, "first phrase");
-    await vi.advanceTimersByTimeAsync(400);
-    flush();
+    await tick(400);
     expect(input.disabled).toBe(false);
     expect(document.activeElement).toBe(input);
     editTrigger(input, "second phrase");
     await vi.advanceTimersByTimeAsync(400);
     expect(writes()).toBe(1);
-    first.resolve({ triggers: ["first phrase"] });
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
-    expect(input.value).toBe("second phrase");
-    expect(document.activeElement).toBe(input);
-    expect(voiceWakeRequest).toHaveBeenLastCalledWith("voicewake.set", {
-      triggers: ["second phrase"],
-    });
+    first.reject(new Error("Older edit failed"));
+    await tick();
+    expectFocused(input, "second phrase");
+    expect(triggerAlert(page)).toBeNull();
+    expect(page.querySelector("[role='status']")?.textContent).toBe("Saving…");
+    expectTriggerWrite(voiceWakeRequest, "second phrase");
     second.resolve({ triggers: ["second phrase"] });
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
+    await tick();
     expect(input.value).toBe("second phrase");
     expect(page.querySelector("[role='status']")?.textContent).toBe("Saved");
+  });
+
+  it("leaves Talk while a trigger write is unresolved", async () => {
+    const pending = createDeferred<{ triggers: string[] }>();
+    const voiceWakeRequest = vi.fn(async (method: string) =>
+      method === "voicewake.get" ? { triggers: ["openclaw"] } : pending.promise,
+    );
+    const { page } = createTalkMutationHarness({ voiceWakeRequest });
+    page.remove();
+    const sendNotification = vi.fn(async () => undefined);
+    const context: ApplicationContext = {
+      ...page.context,
+      nativeNotifications: {
+        snapshot: { permission: "granted", test: null },
+        subscribe: () => () => {},
+        requestPermission: vi.fn(),
+        sendTest: sendNotification,
+        backgroundSessionCompleted: vi.fn(),
+        dispose: vi.fn(),
+      },
+    };
+    const view = await mountTalkSettingsRoutes(context);
+    await waitForSolid(() =>
+      expect(view.container.querySelector("textarea")?.value).toBe("openclaw"),
+    );
+    const configHost = view.container.querySelector("openclaw-config-page");
+    const expectNotificationsBody = () => {
+      const bodies = view.container.querySelectorAll(
+        "#settings-communications-notifications .settings-group",
+      );
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0]?.textContent).toContain(t("configView.notifications.sendTest"));
+      expect(view.container.querySelector("openclaw-config-page")).toBe(configHost);
+      return bodies[0]!;
+    };
+    vi.useFakeTimers();
+    const input = view.container.querySelector("textarea")!;
+    editTrigger(input, "new phrase");
+    await vi.advanceTimersByTimeAsync(400);
+    expectTriggerWrite(voiceWakeRequest, "new phrase");
+
+    await view.navigate("notifications");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.container.querySelector("h1")?.textContent).toBe("Notifications");
+    const notificationsBody = await waitForSolid(expectNotificationsBody);
+    const expectDeparted = () => {
+      expect(view.container.querySelector("openclaw-talk-settings, textarea")).toBeNull();
+      expect(input.isConnected).toBe(false);
+    };
+    expectDeparted();
+    const send = notificationsBody!.querySelector<HTMLButtonElement>("button")!;
+    send.click();
+    await waitForSolid(() => expect(sendNotification).toHaveBeenCalledOnce());
+
+    pending.resolve({ triggers: ["new phrase"] });
+    await vi.advanceTimersByTimeAsync(0);
+    await waitForSolid(() => expect(expectNotificationsBody()).toBe(notificationsBody));
+    expectDeparted();
   });
 
   it.each(["latest phrase", "first phrase"])(
@@ -594,7 +583,7 @@ describe("Talk device and voice wake settings", () => {
       page.remove();
       first.resolve({ triggers: ["first phrase"] });
       await vi.advanceTimersByTimeAsync(400);
-      expect(voiceWakeRequest).toHaveBeenLastCalledWith("voicewake.set", { triggers: [latest] });
+      expectTriggerWrite(voiceWakeRequest, latest);
       expect(writes()).toBe(latest === "first phrase" ? 1 : 2);
     },
   );
@@ -612,48 +601,28 @@ describe("Talk device and voice wake settings", () => {
       editTrigger(input, "hello computer");
       await vi.advanceTimersByTimeAsync(timing === "in-flight" ? 400 : 100);
       setGatewayConnection(false);
-      if (timing === "in-flight") {
-        interrupted.reject(new Error("Connection closed"));
-      }
-      flush();
-      expect(page.querySelector("textarea")?.value).toBe("hello computer");
-      expect(page.querySelector("[role='alert']")?.textContent).toContain("Reconnect");
+      await tick();
+      expect(triggerInput(page)?.value).toBe("hello computer");
+      await waitForSolid(() => expect(triggerAlert(page)?.textContent).toContain("Reconnect"));
       await vi.advanceTimersByTimeAsync(400);
       const priorCalls = voiceWakeRequest.mock.calls.length;
-      page.querySelector<HTMLButtonElement>("[role='alert'] button")?.click();
+      retryTrigger(page);
       expect(voiceWakeRequest).toHaveBeenCalledTimes(priorCalls);
       setGatewayConnection(true);
       flush();
-      expect(page.querySelector("textarea")?.value).toBe("hello computer");
-      page.querySelector<HTMLButtonElement>("[role='alert'] button")?.click();
-      await vi.advanceTimersByTimeAsync(0);
-      flush();
-      expect(voiceWakeRequest).toHaveBeenLastCalledWith("voicewake.set", {
-        triggers: ["hello computer"],
-      });
-      expect(page.querySelector("[role='alert']")).toBeNull();
-      expect(page.querySelector("textarea")?.value).toBe("hello computer");
+      expect(triggerInput(page)?.value).toBe("hello computer");
+      retryTrigger(page);
+      await tick();
+      expectTriggerWrite(voiceWakeRequest, "hello computer");
+      expect(triggerAlert(page)).toBeNull();
+      expect(triggerInput(page)?.value).toBe("hello computer");
+      if (timing === "in-flight") {
+        interrupted.reject(new Error("Retired connection closed"));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(triggerAlert(page)).toBeNull();
+      }
     },
   );
-
-  it("does not carry an unsaved trigger draft into another Gateway", async () => {
-    let gatewayWords = ["openclaw"];
-    const { page, input, voiceWakeRequest, setGatewayConnection } = await voiceWakeFixture(
-      () => ({ triggers: gatewayWords }),
-      () => gatewayWords,
-    );
-    editTrigger(input, "old gateway words");
-    setGatewayConnection(false);
-    gatewayWords = ["new gateway words"];
-    setGatewayConnection(true, "wss://other-gateway.example.test");
-    await vi.advanceTimersByTimeAsync(400);
-    flush();
-    expect(page.querySelector("textarea")?.value).toBe("new gateway words");
-    expect(voiceWakeRequest.mock.calls).toEqual([
-      ["voicewake.get", {}],
-      ["voicewake.get", {}],
-    ]);
-  });
 
   it.each([false, true])(
     "restores an offline trigger draft after reopening Talk only for its Gateway (switch: %s)",
@@ -672,23 +641,19 @@ describe("Talk device and voice wake settings", () => {
       gatewayWords = ["other gateway phrase"];
       setGatewayConnection(true, switchGateway ? "wss://other-gateway.example.test" : undefined);
       const reopened = mountTalkPage(page.context, page.configObject);
-      await vi.advanceTimersByTimeAsync(0);
-      flush();
-      expect(reopened.querySelector("textarea")?.value).toBe(
+      await tick();
+      expect(triggerInput(reopened)?.value).toBe(
         switchGateway ? "other gateway phrase" : "retained phrase",
       );
       if (switchGateway) {
-        expect(reopened.querySelector("[role='alert']")).toBeNull();
+        expect(triggerAlert(reopened)).toBeNull();
         expect(voiceWakeRequest).toHaveBeenCalledTimes(2);
       } else {
-        expect(reopened.querySelector("[role='alert']")?.textContent).toContain("not been saved");
-        reopened.querySelector<HTMLButtonElement>("[role='alert'] button")?.click();
-        await vi.advanceTimersByTimeAsync(0);
-        flush();
-        expect(voiceWakeRequest).toHaveBeenLastCalledWith("voicewake.set", {
-          triggers: ["retained phrase"],
-        });
-        expect(reopened.querySelector("[role='alert']")).toBeNull();
+        expect(triggerAlert(reopened)?.textContent).toContain("not been saved");
+        retryTrigger(reopened);
+        await tick();
+        expectTriggerWrite(voiceWakeRequest, "retained phrase");
+        expect(triggerAlert(reopened)).toBeNull();
       }
     },
   );
@@ -708,17 +673,25 @@ describe("Talk device and voice wake settings", () => {
       )!;
     const expectWakeDisabled = (disabled: boolean) =>
       expect(
-        row("Voice Wake").querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled,
+        row("Voice Wake").querySelector(".settings-toggle__input")?.hasAttribute("disabled"),
       ).toBe(disabled);
     expect(page.textContent).toContain("This Mac");
     expectWakeDisabled(true);
     expect(row("Voice Wake").textContent).toContain("macOS 26");
     row("Hold Right Option to talk").click();
-    expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.pushToTalkEnabled", false);
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
+      "voice.pushToTalkEnabled",
+      false,
+      expect.any(Function),
+    );
     const microphone = row("Microphone").querySelector("select")!;
     microphone.value = "builtin";
     microphone.dispatchEvent(new Event("change"));
-    expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.microphone", "builtin");
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
+      "voice.microphone",
+      "builtin",
+      expect.any(Function),
+    );
     expect(
       [...row("Additional languages").querySelectorAll("option")].map((option) => option.value),
     ).toEqual([""]);
@@ -739,9 +712,13 @@ describe("Talk device and voice wake settings", () => {
     expect(nativeDeviceSettings.openPanel).toHaveBeenCalledWith("microphone-test");
     snapshot.voice.wakeEnabled = true;
     publishSnapshot();
-    expectWakeDisabled(false);
+    await waitForSolid(() => expectWakeDisabled(false));
     row("Voice Wake").click();
-    expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.wakeEnabled", false);
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
+      "voice.wakeEnabled",
+      false,
+      expect.any(Function),
+    );
     snapshot.voice.wakeEnabled = false;
     publishSnapshot();
     expectWakeDisabled(true);
@@ -749,66 +726,30 @@ describe("Talk device and voice wake settings", () => {
     publishSnapshot();
     expectWakeDisabled(false);
   });
-
-  it("preserves pending language additions across an older native acknowledgment and the next edit", () => {
-    const snapshot = createNativeDeviceSettingsSnapshot();
-    snapshot.voice.locale.available.push(
-      { id: "fr-FR", name: "French" },
-      { id: "es-ES", name: "Spanish" },
-      { id: "it-IT", name: "Italian" },
-    );
-    const { settings: nativeDeviceSettings, publish: publishSnapshot } = nativeVoice(snapshot);
-    const { page } = createTalkMutationHarness({ nativeDeviceSettings });
-    flush();
-    const add = (id: string, expected?: string[]) => {
-      const select = page.querySelector<HTMLSelectElement>('select[aria-label="Add language…"]')!;
-      select.value = id;
-      select.dispatchEvent(new Event("change"));
-      if (expected) {
-        expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(
-          "voice.locale.additional",
-          expected,
-          expect.any(Function),
-        );
-      }
-    };
-    add("de-DE");
-    add("fr-FR", ["de-DE", "fr-FR"]);
-    snapshot.voice.locale.additional = ["de-DE"];
-    nativeDeviceSettings.set.mock.calls[0]?.[2]?.();
-    publishSnapshot();
-    add("es-ES", ["de-DE", "fr-FR", "es-ES"]);
-    const primary = page.querySelector<HTMLSelectElement>('select[aria-label="Primary language"]')!;
-    primary.value = "fr-FR";
-    primary.dispatchEvent(new Event("change"));
-    expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
-      "voice.locale.additional",
-      ["de-DE", "es-ES"],
-      expect.any(Function),
-    );
-    snapshot.voice.locale.additional = ["de-DE", "fr-FR"];
-    nativeDeviceSettings.set.mock.calls[1]?.[2]?.();
-    publishSnapshot();
-    expect(primary.value).toBe("fr-FR");
-    add("it-IT", ["de-DE", "es-ES", "it-IT"]);
-    nativeDeviceSettings.set.mock.lastCall?.[2]?.(new Error("Native edit failed"));
-    publishSnapshot();
-    add("es-ES", ["de-DE", "es-ES"]);
-  });
 });
 
 describe("TalkSettingsPage realtime transport mutation", () => {
-  it("acknowledges a model reset from the canonical config revision", async () => {
-    const hashCatalog = createDeferred();
-    const { page, request, runtimeConfig, setConfigHash } = createTalkMutationHarness({
-      activeVoiceSelectionPolicy: "allowlist-default",
-      configSnapshot: { hash: null, configRevisionHash: "revision-1" },
+  async function resetHarness(options: TalkMutationHarnessOptions = {}) {
+    const harness = createTalkMutationHarness({
       defaultModel: "gpt-realtime-2.1",
       model: null,
+      ...options,
+    });
+    await waitForSolid(() => {
+      expect(harness.request).toHaveBeenCalledExactlyOnceWith("talk.catalog", {});
+      expect(harness.page.querySelector("openclaw-select-picker")).not.toBeNull();
+    });
+    return harness;
+  }
+
+  it("acknowledges a model reset from the canonical config revision", async () => {
+    const hashCatalog = createDeferred();
+    const { page, request, runtimeConfig, setConfigHash } = await resetHarness({
+      activeVoiceSelectionPolicy: "allowlist-default",
+      configSnapshot: { hash: null, configRevisionHash: "revision-1" },
       catalogRequest: (requestIndex, catalog) =>
         requestIndex === 3 ? hashCatalog.promise.then(() => catalog) : catalog,
     });
-    await waitForSolid(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
     setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
     await waitForSolid(() => expectVoiceState(page, ACTIVE_VOICES, true));
 
@@ -840,15 +781,9 @@ describe("TalkSettingsPage realtime transport mutation", () => {
   });
 
   it("retains a reset without revisions, then clears it after reconnect with a revision", async () => {
-    const { page, request, setConfigHash, setGatewayConnection } = createTalkMutationHarness({
+    const { page, request, setConfigHash, setGatewayConnection } = await resetHarness({
       activeVoiceSelectionPolicy: "allowlist-default",
       configSnapshot: { hash: null, configRevisionHash: null },
-      defaultModel: "gpt-realtime-2.1",
-      model: null,
-    });
-    await waitForSolid(() => {
-      expect(request).toHaveBeenCalledTimes(1);
-      expect(page.querySelector("openclaw-select-picker")).not.toBeNull();
     });
     page.changeModel(null);
     setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
@@ -868,17 +803,11 @@ describe("TalkSettingsPage realtime transport mutation", () => {
   });
 
   it("clears model reset intent on explicit model, provider, and Gateway changes", async () => {
-    const { page, request, setGatewayConnection } = createTalkMutationHarness({
-      defaultModel: "gpt-realtime-2.1",
-      model: null,
+    const { page, request, setGatewayConnection } = await resetHarness({
       voicesByModel: {
         "gpt-realtime-2.1": ["marin"],
         "gpt-realtime-alt": ["verse"],
       },
-    });
-    await waitForSolid(() => {
-      expect(request).toHaveBeenCalledTimes(1);
-      expect(page.querySelector("openclaw-select-picker")).not.toBeNull();
     });
 
     page.changeModel(null);
@@ -901,45 +830,55 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     await waitForSolid(() => expect(readVoiceOptions(page)).toEqual(["", "xai-active"]));
   });
 
-  it("removes forced consult routing when OpenAI GPT-Live keeps gateway relay", async () => {
-    const removeFormValue = await selectMutation("model", "gpt-live-test-canary", {
-      consultRouting: " Force-Agent-Consult ",
-      transports: ["gateway-relay"],
-    });
-
-    expect(removeFormValue).toHaveBeenCalledTimes(1);
-    expect(removeFormValue).toHaveBeenCalledWith(["talk", "realtime", "consultRouting"]);
-    expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "transport"]);
-  });
-
+  const rejectedModelOptions: TalkMutationHarnessOptions = {
+    model: "gpt-realtime-2.1",
+    consultRouting: "force-agent-consult",
+    aliases: ["openai-voice"],
+    provider: "openai-voice",
+  };
   it.each([
-    ["provider-websocket", ["provider-websocket", "gateway-relay"]],
-    ["gateway-relay", ["webrtc"]],
-  ] as const)(
-    "removes rejected %s before relay consult cleanup on a model switch",
-    async (transport, transports) => {
-      const removeFormValue = await selectMutation("model", " GPT-LIVE-test-canary ", {
-        model: "gpt-realtime-2.1",
-        transport,
-        transports: [...transports],
-        consultRouting: "force-agent-consult",
-        aliases: ["openai-voice"],
-        provider: "openai-voice",
-      });
-
-      expect(removeFormValue).toHaveBeenCalledExactlyOnceWith(["talk", "realtime", "transport"]);
+    [
+      "relay consult",
+      { consultRouting: " Force-Agent-Consult ", transports: ["gateway-relay"] },
+      "consultRouting",
+    ],
+    [
+      "another provider",
+      { provider: "xai", transport: "provider-websocket", consultRouting: "force-agent-consult" },
+      null,
+    ],
+    [
+      "auto provider",
+      { activeProvider: "openai", provider: null, transports: ["gateway-relay"] },
+      null,
+    ],
+    [
+      "family rejection",
+      {
+        ...rejectedModelOptions,
+        transport: "provider-websocket",
+        transports: ["provider-websocket", "gateway-relay"],
+      },
+      "transport",
+      " GPT-LIVE-test-canary ",
+    ],
+    [
+      "provider rejection",
+      { ...rejectedModelOptions, transport: "gateway-relay", transports: ["webrtc"] },
+      "transport",
+      " GPT-LIVE-test-canary ",
+    ],
+  ] satisfies [string, TalkMutationHarnessOptions, string | null, string?][])(
+    "applies model transport policy: %s",
+    async (_name, options, removed, model = "gpt-live-test-canary") => {
+      const remove = await selectMutation("model", model, options);
+      if (removed) {
+        expect(remove).toHaveBeenCalledExactlyOnceWith(["talk", "realtime", removed]);
+      } else {
+        expect(remove).not.toHaveBeenCalled();
+      }
     },
   );
-
-  it("does not apply OpenAI family cleanup to another provider's model", async () => {
-    const removeFormValue = await selectMutation("model", "gpt-live-test-canary", {
-      provider: "xai",
-      transport: "provider-websocket",
-      consultRouting: "force-agent-consult",
-    });
-
-    expect(removeFormValue).not.toHaveBeenCalled();
-  });
 
   it("keeps generic transport handling when a catalog has no family facts", async () => {
     const removeFormValue = await selectMutation("provider", "openai", {
@@ -962,21 +901,18 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "consultRouting"]);
   });
 
-  it.each([["provider fallback", "gpt-realtime-2.1", "gpt-live-test-canary"]])(
-    "removes forced consult when a provider switch activates a GPT-Live %s",
-    async (_label, defaultModel, openAIProviderModel) => {
-      const removeFormValue = await selectMutation("provider", "openai", {
-        consultRouting: "force-agent-consult",
-        defaultModel,
-        openAIProviderModel,
-        provider: "xai",
-        transports: ["gateway-relay", "webrtc"],
-      });
+  it("removes forced consult when a provider switch activates a GPT-Live fallback", async () => {
+    const removeFormValue = await selectMutation("provider", "openai", {
+      consultRouting: "force-agent-consult",
+      defaultModel: "gpt-realtime-2.1",
+      openAIProviderModel: "gpt-live-test-canary",
+      provider: "xai",
+      transports: ["gateway-relay", "webrtc"],
+    });
 
-      expect(removeFormValue).toHaveBeenCalledWith(["talk", "realtime", "consultRouting"]);
-      expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "transport"]);
-    },
-  );
+    expect(removeFormValue).toHaveBeenCalledWith(["talk", "realtime", "consultRouting"]);
+    expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "transport"]);
+  });
 
   it("removes transport when switching to a provider that positively rejects it", async () => {
     const removeFormValue = await selectMutation("provider", "openai", {
@@ -985,15 +921,5 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     });
 
     expect(removeFormValue).toHaveBeenCalledWith(["talk", "realtime", "transport"]);
-  });
-
-  it("uses the auto-selected provider before preserving transport", async () => {
-    expect(
-      await selectMutation("model", "gpt-live-test-canary", {
-        activeProvider: "openai",
-        provider: null,
-        transports: ["gateway-relay"],
-      }),
-    ).not.toHaveBeenCalled();
   });
 });

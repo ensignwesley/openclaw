@@ -8,6 +8,7 @@ import type {
   DevicesPageDataState,
   InventoryRemovalRequest,
   RotatedDeviceTokenOutcome,
+  rotateDeviceToken,
 } from "../../lib/nodes/page-operations.ts";
 import {
   rejectDevicePairing,
@@ -20,12 +21,6 @@ import {
 
 registerDevicesEnglish();
 
-type DeviceAliasTarget = {
-  id: string;
-  name: string;
-  operatorLabel?: string;
-};
-
 type InventoryRemovalPrompt =
   | { kind: "entry"; entry: InventoryRemovalRequest }
   | { kind: "stale"; entries: InventoryRemovalRequest[] };
@@ -37,6 +32,9 @@ export type DevicesDialogHost = {
   gatewayUrl: () => string;
   runPageTask: <T>(task: (pageState: DevicesPageDataState) => T | Promise<T>) => Promise<T>;
   runInventoryTask: (task: (pageState: DevicesPageDataState) => unknown) => Promise<void>;
+  rotateDevice: (
+    params: Parameters<typeof rotateDeviceToken>[1],
+  ) => Promise<RotatedDeviceTokenOutcome | null>;
   setDevicesError: (message: string) => void;
 };
 
@@ -49,14 +47,18 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
   }
 
   // Alias edits and destructive confirmations share one identity-scoped slot.
-  async function editAlias(device: DeviceAliasTarget): Promise<void> {
+  async function editAlias(device: {
+    id: string;
+    name: string;
+    operatorLabel?: string;
+  }): Promise<void> {
     if (!host.canManagePairing() || pending) {
       return;
     }
     const controller = new AbortController();
     pending = controller;
     try {
-      const { showInputDialog } = await import("../../components/input-dialog.ts");
+      const { showInputDialog } = await import("../../components/input-dialog.tsx");
       await showInputDialog({
         signal: controller.signal,
         title: t("devices.inventory.renameTitle", { name: device.name }),
@@ -103,9 +105,12 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
               message: t("devices.inventory.removeStalePromptBody"),
             }),
       },
-      prompt.kind === "entry"
-        ? (pageState) => removeInventoryEntry(pageState, prompt.entry)
-        : (pageState) => removeStaleInventoryEntries(pageState, prompt.entries),
+      () =>
+        host.runInventoryTask((pageState) =>
+          prompt.kind === "entry"
+            ? removeInventoryEntry(pageState, prompt.entry)
+            : removeStaleInventoryEntries(pageState, prompt.entries),
+        ),
     );
   }
 
@@ -120,10 +125,12 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
         message: t("devices.inventory.rejectPromptBody"),
         confirmLabel: t("devices.inventory.reject"),
       },
-      (pageState) =>
-        target === "device"
-          ? rejectDevicePairing(pageState, requestId)
-          : rejectNodePairingRequest(pageState, requestId),
+      () =>
+        host.runPageTask((pageState) =>
+          target === "device"
+            ? rejectDevicePairing(pageState, requestId)
+            : rejectNodePairingRequest(pageState, requestId),
+        ),
     );
   }
 
@@ -135,13 +142,51 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
         details: t("devices.inventory.deviceId", { id: deviceId }),
         confirmLabel: t("devices.inventory.revoke"),
       },
-      (pageState) =>
-        revokeDeviceToken(pageState, {
-          deviceId,
-          gatewayUrl: host.gatewayUrl(),
-          role,
-        }),
+      () =>
+        host.runInventoryTask((pageState) =>
+          revokeDeviceToken(pageState, {
+            deviceId,
+            gatewayUrl: host.gatewayUrl(),
+            role,
+          }),
+        ),
     );
+  }
+
+  // A returned credential must remain visible even after its connection resets.
+  async function reportRotationOutcome(
+    device: { id: string; name: string },
+    role: string,
+    scopes?: string[],
+  ) {
+    if (!host.canManagePairing()) {
+      return;
+    }
+    const outcome = await host.rotateDevice({
+      deviceId: device.id,
+      gatewayUrl: host.gatewayUrl(),
+      role,
+      scopes,
+    });
+    if (outcome) {
+      await (outcome.delivery === "in-band"
+        ? showSecretRevealDialog({
+            title: t("devices.inventory.rotatePromptTitle", { role }),
+            message: t("devices.inventory.rotatePromptBody"),
+            secret: outcome.token,
+            acknowledgeLabel: t("devices.inventory.rotateAcknowledge"),
+            dismissHint: t("devices.inventory.rotateDismissHint"),
+          })
+        : showSecretRevealDialog({
+            // The title names the device; the body reassures about the outcome.
+            title: t("devices.inventory.rotateWithheldTitle", { device: device.name }),
+            status: "success",
+            message: t("devices.inventory.rotateWithheldNext"),
+            callout: t("devices.inventory.rotateWithheldException"),
+            acknowledgeLabel: t("common.close"),
+            note: t("devices.inventory.rotateWithheldNote"),
+          }));
+    }
   }
 
   /**
@@ -175,7 +220,7 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
   // identity and current authority are revalidated before the operation runs.
   async function confirmDestructiveAction(
     prompt: Omit<ConfirmDialogOptions, "danger" | "signal">,
-    run: (pageState: DevicesPageDataState) => unknown,
+    run: () => Promise<unknown>,
   ) {
     if (!host.canManagePairing() || pending) {
       return;
@@ -201,7 +246,7 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
     ) {
       return;
     }
-    await host.runInventoryTask(run);
+    await run();
   }
   return {
     cancel,
@@ -209,30 +254,7 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
     confirmInventoryRemoval,
     confirmPairingReject,
     confirmTokenRevoke,
+    reportRotationOutcome,
     confirmExecApprovalsDiscard,
   };
-}
-
-export async function showDeviceRotationOutcome(
-  deviceName: string,
-  role: string,
-  outcome: RotatedDeviceTokenOutcome,
-) {
-  await (outcome.delivery === "in-band"
-    ? showSecretRevealDialog({
-        title: t("devices.inventory.rotatePromptTitle", { role }),
-        message: t("devices.inventory.rotatePromptBody"),
-        secret: outcome.token,
-        acknowledgeLabel: t("devices.inventory.rotateAcknowledge"),
-        dismissHint: t("devices.inventory.rotateDismissHint"),
-      })
-    : showSecretRevealDialog({
-        // The title names the device; the body reassures about the outcome.
-        title: t("devices.inventory.rotateWithheldTitle", { device: deviceName }),
-        status: "success",
-        message: t("devices.inventory.rotateWithheldNext"),
-        callout: t("devices.inventory.rotateWithheldException"),
-        acknowledgeLabel: t("common.close"),
-        note: t("devices.inventory.rotateWithheldNote"),
-      }));
 }
