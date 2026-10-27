@@ -2526,7 +2526,6 @@
 ["src/channels/inbound-event/envelope.test.ts","../../config/sessions/session-accessor.js","04afe2871e7502cdbcb19e3e543f52d0d9041de3f044a25e9ab59e2e7ea9c0b4",1]
 ["src/channels/inbound-event/envelope.test.ts","../../routing/resolve-route.js","a8ecf08329dfc2bf86cf5a8ed0ad3f20659247680d7ad130fe847b3dd65fba22",1]
 ["src/channels/inbound-event/media.test.ts","../../media/media-probe.js","0654d333c874ddb91c700a7b2f7d30c8a6466257b3ad97d0a4a5b5806b18df6c",1]
-["src/channels/inbound-event/session-transcript-context.runtime.test.ts","../../config/sessions/transcript.js","7a3b09d98a2487362389561d2cf9b79f0c04c8c8c76295e554eb31c1b34290e6",1]
 ["src/channels/join-intro/report-channel-room-join.test.ts","../../cron/isolated-agent.js","d6546f6e86add0dc2306e9d4016ade2f1eea8da5775515d17b912392fe7483b2",1]
 ["src/channels/message-access/participant-input.test.ts","../../sessions/session-participant-recording.js","548c3b5fe0450c369202ea54c45e3fe3babce492806a51864ad203b77801151e",1]
 ["src/channels/message/send.test.ts","../../infra/outbound/deliver.js","8d708dd96a0f1ddd80be3366a6ac3b0fc746f4e4bf94e4cfdc1870e94718b0fa",1]
