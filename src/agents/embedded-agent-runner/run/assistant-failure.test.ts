@@ -210,6 +210,23 @@ async function streamIncompleteMistralResponseOverLoopback() {
 }
 
 describe("handleEmbeddedAssistantFailure", () => {
+  it.each([
+    "Session transcript anchor was not returned: 00000000-0000-4000-8000-000000000101",
+    "Session transcript changed during context read",
+    "session writer claim changed before transcript persistence",
+  ])("does not retry serialized transcript continuity failure: %s", async (errorMessage) => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    setAttempt(
+      fixture.input,
+      buildEmbeddedRunnerAssistant({ stopReason: "error", errorMessage, content: [] }),
+    );
+    fixture.input.emptyErrorRetries = 0;
+
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toThrow(errorMessage);
+    expect(fixture.input.emptyErrorRetries).toBe(0);
+    expectNoRecovery(fixture);
+  });
+
   it("surfaces storage failure without replaying the run or rotating credentials", async () => {
     const fixture = makeExhaustedCredentialFailureInput();
     fixture.input.normalizedAttempt.attemptAssistant = buildEmbeddedRunnerAssistant({

@@ -99,6 +99,19 @@ function makeParams(overrides: FixtureOptions = {}): Params {
 }
 
 describe("handleEmbeddedPromptFailure", () => {
+  it("preserves primary and secondary continuity diagnostics without provider recovery", async () => {
+    const primary = new Error("Session transcript anchor was not returned: synthetic-anchor");
+    const secondary = new Error("Failed to persist terminal assistant error");
+    const error = new AggregateError([primary, secondary], "Turn persistence failed");
+    const params = makeParams({ promptError: error });
+    await expect(handleEmbeddedPromptFailure(params)).rejects.toBe(error);
+    expect(error.errors).toEqual([primary, secondary]);
+    expect(params.preparedRuntime.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
+    expect(params.failover.resolveAuthProfileFailureReason).not.toHaveBeenCalled();
+    expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(params.failover.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
   it("admits current configured-key programs and rejects stale or foreign discovery at execution", async () => {
     let current = true;
     const modelRoute = {

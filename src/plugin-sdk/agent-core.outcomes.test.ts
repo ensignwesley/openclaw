@@ -321,3 +321,32 @@ it.each(["before-provider", "after-provider-abort"] as const)(
     expect(agent.state.isStreaming).toBe(false);
   },
 );
+
+it.each([
+  "Session transcript anchor was not returned: 00000000-0000-4000-8000-000000000101",
+  "Session transcript changed during context read",
+  "session writer claim changed before transcript persistence",
+])("preserves continuity failure without a terminal-error append: %s", async (message) => {
+  const failure = new Error(message);
+  const secondary = new Error("Synthetic obsolete writer refuses terminal error");
+  const streamFn = vi.fn(createTurnSequenceStream([[]]));
+  const agent = new Agent({ streamFn });
+  let terminalErrorWrites = 0;
+  agent.subscribe((event) => {
+    if (event.type !== "message_end") {
+      return;
+    }
+    if (event.message.role === "user") {
+      throw failure;
+    }
+    if (event.message.role === "assistant" && event.message.stopReason === "error") {
+      terminalErrorWrites++;
+      throw secondary;
+    }
+  });
+
+  await expect(agent.prompt("Please summarize the report.")).rejects.toBe(failure);
+  expect(streamFn).not.toHaveBeenCalled();
+  expect(terminalErrorWrites).toBe(0);
+  expect(agent.state.isStreaming).toBe(false);
+});
