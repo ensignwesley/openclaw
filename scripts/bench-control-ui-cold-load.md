@@ -483,6 +483,12 @@ Every reload replays the warm visit's persisted sidebar and trimmed v8 transcrip
 serves synthetic HTTP fixtures natively so production JS/CSS can use the browser's
 cache during warm reloads. Without that option, Playwright's synthetic HTTP routes
 disable caching: "warm" then describes persisted application state only.
+Warm-up captures each build's native local/session storage writes after the
+application exits, including page-exit-only cache hints. Measured repeats replay
+those frozen inputs without carrying writes from a prior measured run.
+Empty reset documents use temporary interception; build switches unload to
+`about:blank`. No reset route remains active during a measured navigation, since
+Playwright routing disables the browser HTTP cache.
 `http.waterfall[].transferBytes` records the actual transfer.
 
 `--warm-reload` adds self-contained cache/paint diagnostics. An optional
@@ -648,6 +654,14 @@ require the separate `--warm-reload` diagnostics or external probe scripts.
 The native typing probe appends to the existing draft and verifies that every
 dispatched character survives streaming; `streaming.typing` retains the count
 and final synthetic draft alongside the timing evidence.
+
+Use `--transcript-messages 2000` for the long-session stream. Add
+`--streaming-content tool-code` to grow an open TypeScript fence alongside an
+expanded tool card, or `--streaming-panes 2` to stream two independent sessions
+in the native split layout. Each pane must retain its typed draft, show the
+complete reply, and follow its own growing tail. `streaming.panes` and
+`streaming.typingByPane` retain these results; the original first-pane fields
+remain available. The default Markdown fixture is still 645 deltas.
 
 Add `--streaming-allocations` to sample JavaScript allocations during the stream
 with CDP HeapProfiler at a 4 KiB interval, retaining samples collected by both
