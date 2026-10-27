@@ -48,6 +48,30 @@ it("warns about synchronous runtime timestamps while preserving the shipped resu
 });
 
 describe("inbound dispatch", () => {
+  function createOwnedInboundFixture() {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "owned-channel" });
+    registry.plugins.push(record);
+    const owner = new PluginInstance("owned-channel", { record, registry });
+    const channel = createRuntimeChannel();
+    const delivered = vi.fn();
+    return {
+      owner,
+      delivered,
+      dispatch: () =>
+        owner.run(() =>
+          channel.inbound.dispatch({
+            cfg: {},
+            channel: "owned-channel",
+            route: { agentId: "main", sessionKey: "agent:main:owned-channel:direct:test" },
+            ctxPayload: { Body: "test", CommandAuthorized: false },
+            delivery: { deliver: delivered },
+            replyOptions: { onQueuedFollowupReplyBatch: delivered },
+          }),
+        ),
+    };
+  }
+
   it("removes event custody before invoking the host-bound reply dispatcher", async () => {
     const callback = vi.fn();
     const dispatch = vi.fn(async () => ({
@@ -73,12 +97,7 @@ describe("inbound dispatch", () => {
   });
 
   it("keeps immediate delivery live after source settlement until dispatch returns", async () => {
-    const registry = createEmptyPluginRegistry();
-    const record = createPluginRecord({ id: "immediate-channel" });
-    registry.plugins.push(record);
-    const owner = new PluginInstance("immediate-channel", { record, registry });
-    const channel = createRuntimeChannel();
-    const delivered = vi.fn();
+    const { owner, delivered, dispatch } = createOwnedInboundFixture();
     dispatchRoutedChannelTurn.mockImplementationOnce(async (turn) => {
       // Immediate execution settles its source before the dispatcher sends its final.
       await turn.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
@@ -86,16 +105,7 @@ describe("inbound dispatch", () => {
       return { status: "handled" };
     });
     try {
-      await owner.run(() =>
-        channel.inbound.dispatch({
-          cfg: {},
-          channel: "immediate-channel",
-          route: { agentId: "main", sessionKey: "agent:main:immediate-channel:direct:test" },
-          ctxPayload: { Body: "test", CommandAuthorized: false },
-          delivery: { deliver: delivered },
-          replyOptions: { onQueuedFollowupReplyBatch: () => undefined },
-        }),
-      );
+      await dispatch();
       expect(delivered).toHaveBeenCalledWith({ text: "immediate answer" }, { kind: "final" });
       expect(owner.hasRetainedConsumers).toBe(false);
     } finally {
@@ -104,28 +114,14 @@ describe("inbound dispatch", () => {
   });
 
   it("keeps queued source callbacks live until queue settlement, then revokes them", async () => {
-    const registry = createEmptyPluginRegistry();
-    const record = createPluginRecord({ id: "queued-channel" });
-    registry.plugins.push(record);
-    const owner = new PluginInstance("queued-channel", { record, registry });
-    const channel = createRuntimeChannel();
+    const { owner, delivered, dispatch } = createOwnedInboundFixture();
     let settle: (() => void | Promise<void>) | undefined;
-    const delivered = vi.fn();
     dispatchRoutedChannelTurn.mockImplementationOnce(async (turn) => {
       turn.replyOptions?.turnAdoptionLifecycle?.onDeferred?.();
       return { status: "handled" };
     });
     try {
-      await owner.run(() =>
-        channel.inbound.dispatch({
-          cfg: {},
-          channel: "queued-channel",
-          route: { agentId: "main", sessionKey: "agent:main:queued-channel:direct:test" },
-          ctxPayload: { Body: "test", CommandAuthorized: false },
-          delivery: { deliver: async () => undefined },
-          replyOptions: { onQueuedFollowupReplyBatch: delivered },
-        }),
-      );
+      await dispatch();
       const queued = dispatchRoutedChannelTurn.mock.calls.at(-1)?.[0];
       if (!queued) {
         throw new Error("Dispatch did not retain the queued source");
@@ -136,7 +132,7 @@ describe("inbound dispatch", () => {
       const batch = {
         kind: "queued-followup" as const,
         runId: "queued-run",
-        originatingChannel: "queued-channel",
+        originatingChannel: "owned-channel",
         payloads: [{ text: "answer" }],
         completion: { kind: "completed" as const },
       };
