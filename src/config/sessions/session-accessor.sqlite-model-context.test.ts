@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { StatementSync } from "node:sqlite";
+import { isMainThread } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
 import { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
+import { readSessionTranscriptModelContextInWorker } from "./session-transcript-read-worker-runtime.js";
 
 it("reuses freshly decoded model payloads while keeping stored and subsequent contexts detached", () =>
   withOpenClawTestState({ label: "model-context-payload-ownership" }, async (state) => {
@@ -190,8 +194,29 @@ it("preserves canonical event bytes across compaction/reset retention and bounde
           const limits = { maxBytes: maxBytes!, maxEvents: maxEvents! };
           // Historical reads independently replay canonical navigation, even at the current leaf.
           const canonical = readSessionTranscriptModelContext(scope, anchor, limits);
-          const projected = readSessionTranscriptModelContext(scope, undefined, limits);
+          const hostReads = observeSqliteReadSql(StatementSync.prototype);
+          let projected: ReturnType<typeof readSessionTranscriptModelContext>;
+          try {
+            projected = readSessionTranscriptModelContext(scope, undefined, limits);
+          } finally {
+            hostReads.restore();
+          }
+          if (isMainThread) {
+            expect(
+              hostReads.queries.filter((query) =>
+                query.includes("session_transcript_active_events"),
+              ),
+            ).toEqual([]);
+          }
           expect(JSON.stringify(projected)).toBe(JSON.stringify(canonical));
+          const workerContext = await readSessionTranscriptModelContextInWorker(
+            scope,
+            undefined,
+            undefined,
+            undefined,
+            limits,
+          );
+          expect(JSON.stringify(workerContext)).toBe(JSON.stringify(canonical));
           expect(JSON.stringify(readSessionTranscriptModelContext(scope, undefined, limits))).toBe(
             JSON.stringify(canonical),
           );
@@ -218,6 +243,22 @@ it("preserves canonical event bytes across compaction/reset retention and bounde
         );
         expect(JSON.stringify(admitted)).toBe(
           JSON.stringify(readSessionTranscriptModelContext(scope, anchor, appendLimits)),
+        );
+        const unknownKeyScope = { ...scope, sessionKey: "unknown" };
+        expect(
+          JSON.stringify(
+            await readSessionTranscriptModelContextInWorker(
+              unknownKeyScope,
+              undefined,
+              undefined,
+              undefined,
+              appendLimits,
+            ),
+          ),
+        ).toBe(
+          JSON.stringify(
+            readSessionTranscriptModelContext(unknownKeyScope, undefined, appendLimits),
+          ),
         );
       }
     }

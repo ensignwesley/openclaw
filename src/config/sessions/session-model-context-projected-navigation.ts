@@ -1,3 +1,4 @@
+import { isMainThread } from "node:worker_threads";
 import { sql } from "kysely";
 import { isTranscriptArtifactProvider } from "../../../packages/agent-core/src/harness/session/transcript-model.js";
 import {
@@ -22,6 +23,9 @@ export function readProjectedModelContextNavigation(
   maxEvents: number,
   beforeRawSeq?: number,
 ) {
+  if (isMainThread) {
+    return undefined;
+  }
   try {
     const result = readCurrentProjectionSnapshot(database, resolved, (projection) => {
       // Imported opaque identities need the canonical tree to normalize retained anchors.

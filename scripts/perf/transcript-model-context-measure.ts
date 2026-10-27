@@ -21,7 +21,17 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { isMainThread, threadId, Worker } from "node:worker_threads";
 import type { TranscriptEvent } from "../../src/config/sessions/session-accessor.sqlite-contract.js";
+
+if (isMainThread) {
+  const worker = new Worker(new URL(import.meta.url), { argv: process.argv.slice(2) });
+  const exitCode = await new Promise<number>((resolve, reject) => {
+    worker.once("error", reject);
+    worker.once("exit", resolve);
+  });
+  process.exit(exitCode);
+}
 
 const { values } = parseArgs({
   options: {
@@ -318,6 +328,8 @@ try {
   const result = {
     mode: values.mode,
     node: process.version,
+    isMainThread,
+    threadId,
     iterations,
     sessions,
     turns,
