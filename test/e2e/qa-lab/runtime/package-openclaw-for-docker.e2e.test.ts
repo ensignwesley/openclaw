@@ -868,6 +868,7 @@ describe("package-openclaw-for-docker", () => {
       "cli-parent-lifetime.mjs",
       "gateway-shutdown-budget.mjs",
       "node-runtime-env.mjs",
+      "runtime-process-bootstrap.generated.mjs",
       "packages/normalization-core/src/number-coercion.ts",
       "packages/normalization-core/src/string-coerce.ts",
       "scripts/package-openclaw-for-docker.mts",
@@ -1732,7 +1733,7 @@ describe("package-openclaw-for-docker", () => {
     expect(calls).toEqual([
       `prepare-docs:${sourceDir}`,
       `prepare:${sourceDir}`,
-      `npm:pack --silent --ignore-scripts --pack-destination ${outputDir} --json=false:${sourceDir}`,
+      `npm:pack --loglevel=error --ignore-scripts --pack-destination ${outputDir} --json=false:${sourceDir}`,
       `restore-changelog:${sourceDir}`,
       `restore-docs:${sourceDir}`,
     ]);

@@ -125,9 +125,6 @@ export class A2aTaskStore {
     if (!task || isTerminalTask(task)) {
       return task;
     }
-    if (this.#writes.has(taskId)) {
-      return this.#writes.get(taskId);
-    }
     const terminal = { ...task };
     if (text?.trim()) {
       terminal.artifacts = [{ artifactId: randomUUID(), parts: [{ text }] }];
