@@ -659,16 +659,19 @@ describe("deliverFollowupDecision", () => {
       deliveryState.routeReply.mockResolvedValue({ ok: true, delivered: true });
       deliveryState.followupRoute = { route: "origin" };
       const payloads = [{ text: "task-correlated answer" }];
-      const result = await deliverDecision({
-        turn,
-        defaults: createDefaults(vi.fn()),
-        decision: { kind: "deliver", payloads },
-        runId: "queued-run",
-      });
-      expect(result).toEqual({ kind: "completed", payloads: matching ? payloads : [] });
-      expect(deliveryState.routeReply).toHaveBeenCalledTimes(matching ? 0 : 1);
-      expect(source).not.toHaveBeenCalled(); // The runner publishes the one terminal batch.
-      deliveryState.followupRoute = undefined;
+      try {
+        const result = await deliverDecision({
+          turn,
+          defaults: createDefaults(vi.fn()),
+          decision: { kind: "deliver", payloads },
+          runId: "queued-run",
+        });
+        expect(result).toEqual({ kind: "completed", payloads: matching ? payloads : [] });
+        expect(deliveryState.routeReply).toHaveBeenCalledTimes(matching ? 0 : 1);
+        expect(source).not.toHaveBeenCalled(); // The runner publishes the one terminal batch.
+      } finally {
+        deliveryState.followupRoute = undefined;
+      }
     },
   );
 

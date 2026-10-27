@@ -103,14 +103,14 @@ export async function dispatchA2aInbound(params: {
 
   // A queued turn outlives dispatch and must retain its own task identity instead
   // of routing the answer as a new outbound peer message.
-  const deliverQueuedReply: NonNullable<GetReplyOptions["onQueuedFollowupReplyBatch"]> = (
+  const deliverQueuedReply: NonNullable<GetReplyOptions["onQueuedFollowupReplyBatch"]> = async (
     batch,
   ) => {
     if (batch.completion.kind === "progress") {
       return;
     }
     if (batch.completion.kind !== "completed") {
-      params.store.fail(params.taskId, `Agent run ${batch.completion.kind}`);
+      await params.store.fail(params.taskId, `Agent run ${batch.completion.kind}`);
       return;
     }
     const text = batch.payloads
@@ -118,7 +118,7 @@ export async function dispatchA2aInbound(params: {
       .map((payload) => payload.text)
       .filter(Boolean)
       .join("\n\n");
-    params.store.complete(params.taskId, text);
+    await params.store.complete(params.taskId, text);
   };
   deliverQueuedReply.ownsCompletion = (channel) => channel === "a2a";
 

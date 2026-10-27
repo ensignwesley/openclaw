@@ -91,6 +91,7 @@ import {
   publicChannelTurnParams,
   type PublicChannelTurnParams,
 } from "../../plugin-sdk/reply-options.js";
+import { copyMutableSessionEntry } from "../../plugin-sdk/session-store-runtime-internal.js";
 import {
   readSessionUpdatedAt,
   updateLastRoute,
@@ -291,7 +292,8 @@ export function createRuntimeChannel(options?: {
     readSessionUpdatedAtAsync: readSessionUpdatedAtInWorker,
     // Plugin runtime property names are a shipped contract; the implementations
     // route through the session accessor boundary.
-    recordSessionMetaFromInbound: recordInboundSessionMeta,
+    recordSessionMetaFromInbound: (params: Parameters<typeof recordInboundSessionMeta>[0]) =>
+      recordInboundSessionMeta(params).then(copyMutableSessionEntry),
     recordInboundSession,
     updateLastRoute,
     updateLastRouteWithAuthority,
