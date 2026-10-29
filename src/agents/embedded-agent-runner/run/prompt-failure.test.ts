@@ -340,75 +340,50 @@ describe("handleEmbeddedPromptFailure", () => {
     },
   );
 
-  it.each(
-    (["prompt", "compaction", "tool_execution"] as const).flatMap((phase) =>
-      [false, true].map((fallbackConfigured) => ({ phase, fallbackConfigured })),
+  it.each([
+    ...(["prompt", "compaction", "tool_execution"] as const).flatMap((phase) =>
+      ([false, true, "opaque"] as const).map((routing) => ({
+        phase,
+        fallbackConfigured: routing === "opaque" ? true : routing,
+        opaque: routing === "opaque",
+        providerStarted: undefined,
+      })),
     ),
-  )(
-    "preserves recorded $phase timeouts with fallback=$fallbackConfigured",
-    async ({ phase, fallbackConfigured }) => {
+    { phase: "tool_execution", fallbackConfigured: true, opaque: false, providerStarted: true },
+  ] as const)(
+    "preserves $phase timeout with fallback=$fallbackConfigured, opaque=$opaque, providerStarted=$providerStarted",
+    async ({ phase, fallbackConfigured, opaque, providerStarted }) => {
       const params = makeParams({
-        promptError: new FailoverError("Provider stopped responding", { reason: "timeout" }),
+        promptError: opaque
+          ? new Error("Opaque provider failure")
+          : new FailoverError("Provider stopped responding", { reason: "timeout" }),
         fallbackConfigured,
         failover: {
-          advanceAuthProfile: vi.fn(async () => false),
+          advanceAuthProfile: vi.fn(async () => opaque),
           resolveAuthProfileFailureReason: vi.fn(() => null),
         },
       });
       params.normalizedAttempt.attempt.terminal = { kind: "timeout", phase, source: "runtime" };
-
+      if (providerStarted) {
+        params.normalizedAttempt.attempt.promptTimeoutOutcome = { providerStarted };
+      }
       const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
-
       const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
       expect(fields).toEqual({
         stopReason: "timeout",
-        ...(phase === "prompt" ? { timeoutPhase: "provider", providerStarted: true } : {}),
+        ...(providerStarted
+          ? { providerStarted }
+          : phase === "prompt"
+            ? { timeoutPhase: "provider", providerStarted: true }
+            : {}),
       });
       expect(
         buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
-      ).toBe(phase === "prompt" ? "hard_timeout" : "timed_out");
-    },
-  );
-
-  it("retains a harness's provider-started timeout without inventing its phase", async () => {
-    const params = makeParams({
-      promptError: new FailoverError("Harness deadline reached", { reason: "timeout" }),
-      failover: {
-        advanceAuthProfile: vi.fn(async () => false),
-        resolveAuthProfileFailureReason: vi.fn(() => null),
-      },
-    });
-    params.normalizedAttempt.attempt.terminal = {
-      kind: "timeout",
-      phase: "tool_execution",
-      source: "runtime",
-    };
-    params.normalizedAttempt.attempt.promptTimeoutOutcome = { providerStarted: true };
-    const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
-    const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
-    expect(fields).toEqual({ stopReason: "timeout", providerStarted: true });
-    expect(
-      buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
-    ).toBe("hard_timeout");
-  });
-
-  it.each(["prompt", "compaction", "tool_execution"] as const)(
-    "retains an opaque %s watchdog failure without changing its retry routing",
-    async (phase) => {
-      const params = makeParams({
-        promptError: new Error("Opaque provider failure"),
-        failover: { resolveAuthProfileFailureReason: vi.fn(() => null) },
-      });
-      params.normalizedAttempt.attempt.terminal = { kind: "timeout", phase, source: "runtime" };
-
-      const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
-
-      expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({
-        stopReason: "timeout",
-        ...(phase === "prompt" ? { timeoutPhase: "provider", providerStarted: true } : {}),
-      });
-      expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
-      expect(error).toHaveProperty("cause", params.terminal.promptError);
+      ).toBe(phase === "prompt" || providerStarted ? "hard_timeout" : "timed_out");
+      if (opaque) {
+        expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
+        expect(error).toHaveProperty("cause", params.terminal.promptError);
+      }
     },
   );
 
