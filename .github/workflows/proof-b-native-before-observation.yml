@@ -1,0 +1,39 @@
+name: B native before-observation diagnostic
+on:
+  push:
+    branches: [proof/b-native-before-observation-20261029]
+permissions:
+  contents: read
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Setup standard Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+          install-bun: "true"
+      - name: Exact source identity
+        run: |
+          git rev-parse HEAD
+          sha256sum test/b-before-observation.e2e.test.ts
+      - name: Real Gateway native diagnostic
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          OPENCLAW_E2E_WORKERS: "1"
+          OPENCLAW_E2E_VERBOSE: "1"
+          CONTINUITY_PROOF_OUTPUT: ${{ runner.temp }}/b-native-proof
+        run: pnpm test:e2e:gateway test/b-before-observation.e2e.test.ts
+      - name: Retain diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: b-native-before-observation-${{ github.sha }}
+          path: ${{ runner.temp }}/b-native-proof/
+          if-no-files-found: warn
+          retention-days: 7
