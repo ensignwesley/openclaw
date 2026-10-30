@@ -41,6 +41,45 @@ export function isSessionControllerSourceQueued(input: SessionControllerInput): 
   return input.phase === "preparing" || input.phase === "waiting" || input.phase === "injecting";
 }
 
+/** A reservation alone cannot promise recovery after a failed turn retires. */
+export function hasLiveSessionControllerSourceExecution(input: SessionControllerInput): boolean {
+  const { mailbox, source } = input;
+  if (
+    mailbox.owner.mailbox !== mailbox ||
+    sessionControllers.get(mailbox.owner.id) !== mailbox.owner ||
+    !mailbox.entries.includes(input) ||
+    mailbox.abortController.signal.aborted ||
+    input.phase !== "waiting" ||
+    input.claim ||
+    input.injection ||
+    input.withdrawalHolds ||
+    input.retirementRequested ||
+    input.custody.completed ||
+    input.custody.cancellationRetired ||
+    input.custody.failure !== undefined ||
+    !source ||
+    [
+      input.abortSignal,
+      source.abortSignal,
+      source.queueAbortSignal,
+      source.operatorAuthority?.signal,
+      input.sourceAdapter?.signal,
+      input.sourceAdapter?.authority?.signal,
+    ].some((signal) => signal?.aborted) ||
+    (!input.ready &&
+      !input.task &&
+      (input.payload !== "ready" || !mailbox.dispatchEnabled || !mailbox.dispatch))
+  ) {
+    return false;
+  }
+  try {
+    input.sourceAdapter?.authority?.assertCurrent();
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 /**
  * Releases successors only after this reservation can no longer inject ahead of them:
  * its native acceptance, its settled outcome, a turn claim, or its retirement.

@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { resolveUserTimezone } from "../../agents/date-time.js";
+import { readSessionPendingInputSettlements } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { sourceInputMatchesDeliveryContext } from "../../infra/outbound/source-reply-input-context.js";
 import {
   getSessionControllerEntryForOperation,
   isCurrentSessionControllerOperation,
 } from "../../sessions/session-controller.identity.js";
+import { hasLiveSessionControllerSourceExecution } from "../../sessions/session-controller.mailbox-source.js";
 import { readUserTurnSourceInputs } from "../../sessions/user-turn-source-delivery.js";
 import { getUserTurnTranscriptAdmissionOwner } from "../../sessions/user-turn-transcript-admission.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
@@ -26,7 +29,17 @@ export type ContinuityFailureDisposition =
 
 /** An attempt error never proves loss. Only its original accepted input can owe a notice. */
 export async function prepareContinuityFailureNotice(
-  turn: AgentTurnParams,
+  turn: Pick<
+    AgentTurnParams,
+    | "replyOperation"
+    | "sessionKey"
+    | "storePath"
+    | "followupRun"
+    | "opts"
+    | "getActiveSessionEntry"
+    | "sessionCtx"
+    | "runtimePolicySessionKey"
+  >,
   runId: string,
   inputRecorder?: UserTurnTranscriptRecorder | null,
 ): Promise<{
@@ -60,9 +73,6 @@ export async function prepareContinuityFailureNotice(
   if (!originals.length) {
     return { disposition: "unknown" };
   }
-  if (originals.some((source) => !source.consumed)) {
-    return { disposition: "recovering" };
-  }
   // Native local observation reconciles real canonical finals even when ordinary
   // observation was skipped by an awaited postcommit failure. Its return value
   // alone is not a durable exact-input receipt.
@@ -80,21 +90,34 @@ export async function prepareContinuityFailureNotice(
   if (completed?.reason === "completed") {
     return { disposition: "unknown" };
   }
-  const recoveryOwnsInput = () =>
+  // A staged native input proves custody, not a successor. Match each original
+  // against a runnable, positively retained native source, never an admission union.
+  const recoveryOwnsInput = (original: (typeof originals)[number]) =>
     getSessionControllerEntryForOperation(operation).mailbox?.entries.some((input) => {
-      if (input.claim?.operation === operation || !input.source?.userTurnTranscriptRecorder) {
+      if (!hasLiveSessionControllerSourceExecution(input)) {
         return false;
       }
-      const admission = getUserTurnTranscriptAdmissionOwner(
-        input.source.userTurnTranscriptRecorder,
-      )?.receipt();
-      return (
-        admission && unanswered.some((source) => source.admission?.entryId === admission.entryId)
-      );
+      const candidateRecorder = input.source?.userTurnTranscriptRecorder;
+      const owner = candidateRecorder && getUserTurnTranscriptAdmissionOwner(candidateRecorder);
+      const candidates = owner?.sources?.length
+        ? owner.sources
+        : candidateRecorder
+          ? [candidateRecorder]
+          : [];
+      return candidates.some((candidate) => {
+        const pending = getUserTurnTranscriptAdmissionOwner(candidate)?.pendingInput();
+        return (
+          pending &&
+          readSessionPendingInputSettlements(pending).some(
+            (source) =>
+              source.sessionKey === original.sessionKey &&
+              source.sessionId === original.sessionId &&
+              source.identity &&
+              isDeepStrictEqual(source.identity, original.identity),
+          )
+        );
+      });
     });
-  if (recoveryOwnsInput()) {
-    return { disposition: "recovering" };
-  }
   return withAgentTurnCompletion(
     {
       agentId: turn.followupRun.run.agentId,
@@ -114,7 +137,8 @@ export async function prepareContinuityFailureNotice(
         return { disposition: "delivery-unknown" };
       }
       assertCurrent();
-      if (recoveryOwnsInput()) {
+      const unowned = unanswered.filter((source) => !recoveryOwnsInput(source));
+      if (!unowned.length) {
         return { disposition: "recovering" };
       }
       const shared =
@@ -127,10 +151,10 @@ export async function prepareContinuityFailureNotice(
         runtimePolicySessionKey: turn.runtimePolicySessionKey,
         opts: turn.opts,
       });
-      if (unanswered.some((input) => !sourceInputMatchesDeliveryContext(input.origin, context))) {
+      if (unowned.some((input) => !sourceInputMatchesDeliveryContext(input.origin, context))) {
         return { disposition: "unknown" };
       }
-      const text = unanswered
+      const text = unowned
         .map(({ message }) => {
           const raw =
             typeof message.content === "string"
@@ -161,7 +185,7 @@ export async function prepareContinuityFailureNotice(
         intentId,
         sourceRunId: runId,
         sourceOutcome: "failure-notice",
-        sourceInputs: unanswered.map((source) => source.identity!),
+        sourceInputs: unowned.map((source) => source.identity!),
         deliveries: [{ id: deliveryId, state: "prepared" }],
         createdAt: Date.now(),
         context,
