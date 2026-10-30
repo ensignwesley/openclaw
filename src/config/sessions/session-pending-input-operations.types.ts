@@ -4,7 +4,7 @@ import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcri
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import type {
   SessionPendingInputRow,
-  SessionInputCompletion,
+  SessionInputSettlementRow,
 } from "./session-pending-input.types.js";
 
 type PendingInputIdentity = {
@@ -13,7 +13,10 @@ type PendingInputIdentity = {
   idempotencyKey: string;
 };
 
-export type PendingInputRead = PendingInputStageRead | PendingInputSourceRead;
+export type PendingInputRead =
+  | PendingInputStageRead
+  | PendingInputSourceRead
+  | (PendingInputIdentity & { kind: "settlement" });
 
 type PendingInputStageRead = PendingInputIdentity & {
   kind: "stage";
@@ -23,6 +26,12 @@ type PendingInputStageRead = PendingInputIdentity & {
 export type PendingInputSourceRead = PendingInputIdentity & {
   kind: "source";
   pendingOnly: boolean;
+};
+
+export type PendingInputSettlementSnapshot = {
+  kind: "settlement";
+  current: boolean;
+  row?: SessionInputSettlementRow;
 };
 
 export type PendingInputSourceSnapshot = {
@@ -37,7 +46,7 @@ export type PendingInputSnapshot = {
   kind: "stage";
   current: boolean;
   existing?: SessionPendingInputRow;
-  previous?: SessionInputCompletion;
+  previous?: SessionInputSettlementRow;
   committed?: { messageId: string; message: PersistedUserTurnMessage };
 };
 
@@ -57,6 +66,10 @@ export type PendingInputMutation =
       messageJson: string;
     })
   | (PendingInputSettlementIdentity & {
+      kind: "source-delivery";
+      delivery: import("./session-input-settlement.js").SessionInputSourceDelivery;
+    })
+  | (PendingInputSettlementIdentity & {
       kind: "complete";
       outcome: AgentRunTerminalOutcome;
     })
@@ -73,6 +86,7 @@ export type PendingInputMutationReceipt = PendingInputIdentity & {
   requestHash: string;
   lifecycleGeneration: string;
   outcome?: AgentRunTerminalOutcome;
+  sourceDelivery?: import("./session-input-settlement.js").SessionInputSourceDelivery;
   withdrawnInputId?: string;
   stagedInput?: SessionPendingInputRow;
 };

@@ -6,6 +6,9 @@ export type PendingFinalDeliveryState = {
   intentId?: string;
   /** Original admitted source; survives claim cleanup before the queued final settles. */
   sourceRunId?: string;
+  /** Private original input identities captured by the admitted recorder before final custody. */
+  sourceInputs?: import("./session-input-settlement.js").SessionInputSettlementIdentity[];
+  sourceOutcome?: "answer" | "failure-notice";
   deliveries?: Array<{
     id: string;
     state: "prepared" | "queued" | "delivered" | "suppressed" | "unknown";

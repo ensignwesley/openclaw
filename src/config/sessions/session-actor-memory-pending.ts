@@ -4,6 +4,10 @@ import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
+import {
+  encodeSessionInputSettlement,
+  mergeSessionInputSettlement,
+} from "./session-input-settlement.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import type {
@@ -16,6 +20,7 @@ import type {
   PendingInputMutationReceipt,
   PendingInputRead,
   PendingInputSnapshot,
+  PendingInputSettlementSnapshot,
   PendingInputSourceSnapshot,
 } from "./session-pending-input-operations.types.js";
 import {
@@ -27,7 +32,7 @@ import {
   parseSessionPendingInputMessage,
 } from "./session-pending-input-value.js";
 import type {
-  SessionInputCompletion,
+  SessionInputSettlementRow,
   SessionPendingInputRow,
 } from "./session-pending-input.types.js";
 
@@ -83,7 +88,7 @@ export function createSessionActorMemoryPending(
       return { kind: "stage", current: false };
     }
     const existing = pending(input);
-    const previous = input.trackCompletion ? completion(input) : undefined;
+    const previous = completion(input);
     if (existing && Buffer.byteLength(existing.message_json, "utf8") > MAX_PAYLOAD_BYTES) {
       throw new Error("Pending input exceeds the Gateway payload limit");
     }
@@ -94,7 +99,7 @@ export function createSessionActorMemoryPending(
       previous,
       committed:
         existing?.consumed_event_id != null ||
-        (previous && isFinalInputCompletion(previous.outcome))
+        (previous?.outcome && isFinalInputCompletion(previous.outcome))
           ? undefined
           : committed(input, false),
     });
@@ -120,10 +125,18 @@ export function createSessionActorMemoryPending(
   };
   return {
     authority,
-    read(input: PendingInputRead): PendingInputSnapshot | PendingInputSourceSnapshot {
+    read(
+      input: PendingInputRead,
+    ): PendingInputSnapshot | PendingInputSourceSnapshot | PendingInputSettlementSnapshot {
       if (input.kind === "stage") {
         return readStage(input);
       }
+      if (input.kind === "settlement")
+        return {
+          kind: "settlement",
+          current: owns(input),
+          row: owns(input) ? structuredClone(completion(input)) : undefined,
+        };
       const snapshot: PendingInputSourceSnapshot = { kind: "source", current: owns(input) };
       if (!snapshot.current) {
         return snapshot;
@@ -275,6 +288,33 @@ export function createSessionActorMemoryPending(
             };
         state.pendingInputs.set(input.idempotencyKey, staged);
         receipt.stagedInput = structuredClone(staged);
+      } else if (input.kind === "source-delivery") {
+        const retained = completion(input);
+        if (
+          retained &&
+          (retained.run_id !== input.runId || retained.request_hash !== input.requestHash)
+        ) {
+          throw new SessionPendingInputCustodyError(
+            "Source delivery conflicts with the accepted input",
+          );
+        }
+        const value = mergeSessionInputSettlement(
+          { processing: retained?.outcome, sourceDelivery: retained?.sourceDelivery },
+          { sourceDelivery: input.delivery },
+        );
+        state.completions.set(input.idempotencyKey, {
+          session_key: input.sessionKey,
+          session_id: input.sessionId,
+          idempotency_key: input.idempotencyKey,
+          run_id: input.runId,
+          request_hash: input.requestHash,
+          outcome_json: encodeSessionInputSettlement(value),
+          outcome: value.processing,
+          sourceDelivery: value.sourceDelivery,
+          succeeded: retained?.succeeded ?? 0,
+          completed_at: retained?.completed_at ?? input.delivery.settledAt,
+        });
+        receipt.sourceDelivery = structuredClone(value.sourceDelivery);
       } else if (input.kind === "complete") {
         const retained = completion(input);
         if (
@@ -285,17 +325,21 @@ export function createSessionActorMemoryPending(
             "Input completion conflicts with the accepted input",
           );
         }
-        if (retained && isFinalInputCompletion(retained.outcome)) {
+        if (retained?.outcome && isFinalInputCompletion(retained.outcome)) {
           receipt.outcome = structuredClone(retained.outcome);
         } else {
           const outcome = structuredClone(input.outcome);
-          const next: SessionInputCompletion = {
+          const next: SessionInputSettlementRow = {
             session_key: input.sessionKey,
             session_id: input.sessionId,
             idempotency_key: input.idempotencyKey,
             run_id: input.runId,
             request_hash: input.requestHash,
-            outcome_json: JSON.stringify(outcome),
+            outcome_json: encodeSessionInputSettlement({
+              processing: outcome,
+              sourceDelivery: retained?.sourceDelivery,
+            }),
+            sourceDelivery: retained?.sourceDelivery,
             outcome,
             succeeded: classifyAgentRunTerminalOutcome(outcome) === "success" ? 1 : 0,
             completed_at: Date.now(),

@@ -96,6 +96,21 @@ export function readWithdrawnSessionPendingInputId(
   return owner && withdrawnOwners.has(owner) ? owner.inputId : undefined;
 }
 
+/** Native source facts come only from private registered custody, never copied SDK projections. */
+export function readSessionPendingInputSettlements(receipt: SessionPendingInputReceipt) {
+  const owner = receiptOwners.get(receipt);
+  return (owner?.sources ?? (owner ? [owner] : [])).map((source) => {
+    assertSessionPendingInputLifetimeCurrent(source);
+    return {
+      sessionKey: source.sessionKey,
+      sessionId: source.sessionId,
+      consumed: source.consumed === true,
+      message: parseSessionPendingInputMessage(source.messageJson),
+      ...source.settlement,
+    };
+  });
+}
+
 function ownerReceipt(
   owner: SessionPendingInputOwner,
   queuedReplay?: true,
@@ -356,18 +371,6 @@ async function stagePreparedPendingInput(
     if (previous && (previous.request_hash !== requestHash || previous.run_id !== options.runId)) {
       throw new Error("Input completion idempotency key conflicts with the accepted input");
     }
-    if (previous && isFinalInputCompletion(previous.outcome)) {
-      return {
-        state: "consumed",
-        inputId: identity.idempotencyKey,
-        message,
-        completion: previous.outcome,
-        run: () => {
-          throw new Error("Input processing has already completed");
-        },
-        finish: () => {},
-      };
-    }
     const assertUnowned = (row = existing) => {
       if (row && hasRegisteredSessionPendingInputOwner(store.workerDatabasePath, row)) {
         throw new SessionPendingInputCustodyError(
@@ -418,6 +421,31 @@ async function stagePreparedPendingInput(
       if (owner) {
         assertRegisteredSessionPendingInputOwner(owner);
       }
+    };
+    const sourceSettlement = {
+      get identity() {
+        return settlementIdentity();
+      },
+      async read() {
+        assertCompletion();
+        const snapshot = await store.read({ ...identity, kind: "settlement" });
+        assertCompletion();
+        if (snapshot.kind !== "settlement" || !snapshot.current)
+          throw new SessionPendingInputCustodyError("Input source is no longer current");
+        const row = snapshot.row;
+        if (row && (row.run_id !== options.runId || row.request_hash !== requestHash))
+          throw new SessionPendingInputCustodyError("Input source identity changed");
+        return row?.sourceDelivery;
+      },
+      async write(delivery: import("./session-input-settlement.js").SessionInputSourceDelivery) {
+        if (finished)
+          throw new SessionPendingInputCustodyError("Input source owner has been released");
+        assertCompletion();
+        await store.mutate(
+          { ...settlementIdentity(), kind: "source-delivery", delivery },
+          (_, facts) => assertPrepared(facts, assertCompletion),
+        );
+      },
     };
     const completionInput = (outcome: AgentRunTerminalOutcome) => ({
       ...settlementIdentity(),
@@ -509,6 +537,32 @@ async function stagePreparedPendingInput(
       ...(complete ? { complete, completeAsync } : {}),
       settled: store.settled,
     };
+    if (previous?.outcome && isFinalInputCompletion(previous.outcome)) {
+      owner = {
+        settlement: sourceSettlement,
+        sessionActor: scope.sessionActor,
+        agentId: scope.agentId,
+        databaseAgentId: store.databaseAgentId,
+        inputId: randomUUID(),
+        transcriptInputId: identity.idempotencyKey,
+        sessionId: scope.sessionId,
+        sessionKey: store.sessionKey,
+        databasePath: store.path,
+        workerDatabasePath: store.workerDatabasePath,
+        idempotencyKey: identity.idempotencyKey,
+        lifecycleGeneration,
+        messageJson: JSON.stringify(message),
+        assertCurrent,
+        authority: options.authority,
+        consumed: true,
+        finish,
+      };
+      registerSessionPendingInputOwner(owner);
+      retained = true;
+      return Object.assign(ownerReceipt(owner), completionMethods, {
+        completion: previous.outcome,
+      });
+    }
     if (committed) {
       if (options.trackCompletion) {
         const committedHash = resolveCommittedPendingInputRequestHash(
@@ -531,6 +585,7 @@ async function stagePreparedPendingInput(
         await assertCurrent();
       }
       owner = {
+        settlement: sourceSettlement,
         sessionActor: scope.sessionActor,
         agentId: scope.agentId,
         databaseAgentId: store.databaseAgentId,
@@ -613,6 +668,7 @@ async function stagePreparedPendingInput(
               );
             }
             owner = {
+              settlement: sourceSettlement,
               sessionActor: scope.sessionActor,
               agentId: scope.agentId,
               databaseAgentId: store.databaseAgentId,

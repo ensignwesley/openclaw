@@ -159,11 +159,36 @@ export function normalizePendingFinalDelivery(
   const intentId = normalizeOptionalString(value.intentId);
   const sourceRunId = normalizeOptionalString(value.sourceRunId);
   const deliveries = normalizePendingFinalDeliveries(value.deliveries);
-  const base = {
+  const base: Pick<
+    NonNullable<SessionEntry["pendingFinalDelivery"]>,
+    | "createdAt"
+    | "context"
+    | "intentId"
+    | "sourceRunId"
+    | "sourceInputs"
+    | "sourceOutcome"
+    | "deliveries"
+  > = {
     createdAt,
     ...(isRecord(value.context) ? { context: value.context } : {}),
     ...(intentId ? { intentId } : {}),
     ...(sourceRunId ? { sourceRunId } : {}),
+    ...(Array.isArray(value.sourceInputs) &&
+    value.sourceInputs.every(
+      (input) =>
+        isRecord(input) &&
+        [input.idempotencyKey, input.runId, input.requestHash, input.lifecycleGeneration].every(
+          (part) => typeof part === "string" && part.length > 0,
+        ),
+    )
+      ? {
+          sourceInputs:
+            value.sourceInputs as import("./session-input-settlement.js").SessionInputSettlementIdentity[],
+        }
+      : {}),
+    ...(value.sourceOutcome === "answer" || value.sourceOutcome === "failure-notice"
+      ? { sourceOutcome: value.sourceOutcome }
+      : {}),
     ...(deliveries ? { deliveries } : {}),
   };
   if (value.kind === "transport-only") {

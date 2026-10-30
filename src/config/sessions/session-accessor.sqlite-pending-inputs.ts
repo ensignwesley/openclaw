@@ -24,6 +24,10 @@ import {
   readSessionActorTransactionState,
   writableSessionActorMap,
 } from "./session-actor-transaction.js";
+import {
+  decodeSessionInputSettlement,
+  encodeSessionInputSettlement,
+} from "./session-input-settlement.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import {
@@ -330,10 +334,15 @@ type SessionInputCompletionScope = Pick<ResolvedTranscriptScope, "sessionId" | "
   idempotencyKey: string;
 };
 
-export function readSessionInputCompletion(
+export function readSessionInputSettlementRow(
   database: PendingInputDatabase,
   scope: SessionInputCompletionScope,
-): SessionInputCompletion | undefined {
+):
+  | (Omit<SessionInputCompletion, "outcome"> & {
+      outcome?: AgentRunTerminalOutcome;
+      sourceDelivery?: import("./session-input-settlement.js").SessionInputSourceDelivery;
+    })
+  | undefined {
   const actor = readSessionActorTransactionState(database, scope);
   let row = actor?.completions.get(scope.idempotencyKey);
   if (!row && !actor?.completionsComplete) {
@@ -351,8 +360,16 @@ export function readSessionInputCompletion(
     return undefined;
   }
   // SAFETY: only writeSessionInputCompletion writes this feature-owned table with typed terminal outcomes.
-  const outcome = JSON.parse(row.outcome_json) as AgentRunTerminalOutcome;
-  return { ...row, outcome };
+  const value = decodeSessionInputSettlement(row.outcome_json);
+  return { ...row, outcome: value.processing, sourceDelivery: value.sourceDelivery };
+}
+
+export function readSessionInputCompletion(
+  database: PendingInputDatabase,
+  scope: SessionInputCompletionScope,
+): SessionInputCompletion | undefined {
+  const row = readSessionInputSettlementRow(database, scope);
+  return row?.outcome ? { ...row, outcome: row.outcome } : undefined;
 }
 
 /** The caller holds the write transaction and has revalidated the exact live admission owner. */
@@ -365,20 +382,23 @@ export function writeSessionInputCompletion(
   },
   outcome: AgentRunTerminalOutcome,
 ): AgentRunTerminalOutcome {
-  const retained = readSessionInputCompletion(database, scope);
+  const retained = readSessionInputSettlementRow(database, scope);
   if (
     retained &&
     (retained.run_id !== scope.runId || retained.request_hash !== scope.requestHash)
   ) {
     throw new SessionPendingInputCustodyError("Input completion conflicts with the accepted input");
   }
-  if (retained && isFinalInputCompletion(retained.outcome)) {
+  if (retained?.outcome && isFinalInputCompletion(retained.outcome)) {
     return retained.outcome;
   }
   const succeeded = classifyAgentRunTerminalOutcome(outcome) === "success";
   const completedAt = Date.now();
   const completionState = {
-    outcome_json: JSON.stringify(outcome),
+    outcome_json: encodeSessionInputSettlement({
+      processing: outcome,
+      sourceDelivery: retained?.sourceDelivery,
+    }),
     succeeded: succeeded ? 1 : 0,
     completed_at: completedAt,
   };

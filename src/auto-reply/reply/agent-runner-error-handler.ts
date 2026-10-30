@@ -16,6 +16,7 @@ import {
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveReplyCompletion, resolveReplyExpectation } from "../../agents/reply-completion.js";
+import { classifySessionTranscriptContinuityError } from "../../agents/sessions/transcript-turn-error.js";
 import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
@@ -26,6 +27,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
+import { prepareContinuityFailureNotice } from "./agent-runner-continuity-notice.js";
 import type { AgentTurnInternalResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
   buildAuthProfileFailoverFailureText,
@@ -151,6 +153,24 @@ export async function handleAgentExecutionError(params: {
   const replyOperationAbortAction = resolveReplyOperationAbortAction(err);
   if (replyOperationAbortAction) {
     return replyOperationAbortAction;
+  }
+  if (classifySessionTranscriptContinuityError(err)) {
+    let disposition: Awaited<ReturnType<typeof prepareContinuityFailureNotice>> = {
+      disposition: "unknown",
+    };
+    try {
+      disposition = await prepareContinuityFailureNotice(turn, params.runId);
+    } catch (error) {
+      defaultRuntime.error(`Input source settlement deferred: ${formatErrorMessage(error)}`);
+    }
+    // Keep the failed attempt diagnostic, but never present it as the original input's fate.
+    takePendingLifecycleTerminal().emit("error", err, { suppressErrorNotice: true });
+    await params.modelPatch.fail(err);
+    return {
+      kind: "final",
+      continuityDisposition: disposition.disposition,
+      payload: disposition.payload ?? { text: "" },
+    };
   }
   if (err instanceof WorkerNodeLostError) {
     const runState = resolveReplyOperationRunState(turn.opts);

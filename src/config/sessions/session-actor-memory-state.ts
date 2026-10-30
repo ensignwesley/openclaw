@@ -17,7 +17,7 @@ import {
 } from "./session-actor-memory-side-effects-contract.js";
 import type { SessionActorMemoryUsageRollup } from "./session-actor-memory-usage-contract.js";
 import type {
-  SessionInputCompletion,
+  SessionInputSettlementRow,
   SessionPendingInputRow,
 } from "./session-pending-input.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -44,7 +44,7 @@ export type SessionActorMemoryWindow = {
     searchOrder?: number;
   }>;
   pendingInputs: Map<string, SessionPendingInputRow>;
-  completions: Map<string, SessionInputCompletion>;
+  completions: Map<string, SessionInputSettlementRow>;
   goalReceipts: Map<string, SessionActorMemoryGoalReceipt>;
 };
 

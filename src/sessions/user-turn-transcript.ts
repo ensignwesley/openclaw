@@ -9,6 +9,7 @@ import {
 import {
   readSessionPendingInputRequesterOrigin,
   readWithdrawnSessionPendingInputId,
+  stageSessionPendingInput,
 } from "../config/sessions/session-accessor.pending-inputs.js";
 import {
   registerUserTurnInputActor,
@@ -723,6 +724,27 @@ export function createUserTurnTranscriptRecorder(
     inputActorBinding = binding;
   });
   registerUserTurnTranscriptAdmissionOwner(recorder, {
+    sources: params.pendingInputSources,
+    ensureSource: async (assertCurrent) => {
+      if (
+        !pendingInput &&
+        admissionReceipt &&
+        admittedMessage?.idempotencyKey &&
+        !params.pendingInputSources?.length
+      ) {
+        const captured = admissionReceipt;
+        pendingInput = await stageSessionPendingInput(captured, {
+          message: admittedMessage,
+          runId: admittedMessage.idempotencyKey,
+          requestFingerprint: params.pendingInputRequestFingerprint,
+          assertCurrent: () => {
+            assertCurrent();
+            if (admissionReceipt !== captured) throw new Error("Input source admission changed");
+          },
+        });
+      }
+      return pendingInput;
+    },
     requesterOrigin: () =>
       pendingInput ? readSessionPendingInputRequesterOrigin(pendingInput) : requesterOrigin,
     pendingInput: () => pendingInput,

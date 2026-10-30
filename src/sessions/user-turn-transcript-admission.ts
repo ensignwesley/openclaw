@@ -24,6 +24,8 @@ export type UserTurnPromptReactionSource = Readonly<{
 }>;
 
 type AdmissionOwner = {
+  sources?: readonly UserTurnTranscriptRecorder[];
+  ensureSource?: (assertCurrent: () => void) => Promise<SessionPendingInputReceipt | undefined>;
   requesterOrigin: () => RequesterOrigin | undefined;
   promptReactionSource?: UserTurnPromptReactionSource;
   pendingInput: () => SessionPendingInputReceipt | undefined;

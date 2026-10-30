@@ -13,6 +13,7 @@ import type {
   PendingInputMutationReceipt,
   PendingInputRead,
   PendingInputSnapshot,
+  PendingInputSettlementSnapshot,
   PendingInputSourceSnapshot,
 } from "./session-pending-input-operations.types.js";
 import type { projectPendingInputReceipts } from "./session-pending-input-value.js";
@@ -20,7 +21,7 @@ import type { projectPendingInputReceipts } from "./session-pending-input-value.
 export type SessionActorMemoryPendingReads = {
   "session.pendingInput.read": {
     input: PendingInputRead;
-    output: PendingInputSnapshot | PendingInputSourceSnapshot;
+    output: PendingInputSnapshot | PendingInputSourceSnapshot | PendingInputSettlementSnapshot;
   };
   "session.pendingInput.history": {
     input: PendingInputHistoryQuery;

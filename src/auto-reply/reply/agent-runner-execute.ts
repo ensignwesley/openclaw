@@ -322,6 +322,19 @@ async function executePreparedReplyAgentRunWithCompletion(
   activeSessionEntry = getActiveSessionEntry();
 
   if (runOutcome.outcome.kind !== "settled") {
+    if (runOutcome.outcome.kind === "rejected" && runOutcome.outcome.continuityDisposition) {
+      const disposition = runOutcome.outcome.continuityDisposition;
+      if (
+        disposition === "answered" ||
+        disposition === "notified" ||
+        disposition === "saved-unanswered"
+      )
+        replyOperation.complete();
+      else if (disposition !== "cancelled") {
+        const state = resolveReplyOperationRunState(opts);
+        if (state) state.replyCompletion = { expectation: "required", outcome: "pending" };
+      }
+    }
     // Only captured facts cross cancellation; no successor adoption, hooks, or reply work.
     await accountAgentTurnCompaction({
       compaction: runOutcome.outcome.compaction,

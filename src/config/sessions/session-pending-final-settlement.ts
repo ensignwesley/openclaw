@@ -29,6 +29,7 @@ export function projectPendingFinalDeliverySettlement(
 ): {
   patch: Partial<InternalSessionEntry> | null;
   state: PendingFinalDeliveryState | "stale";
+  sourceDelivery?: import("./session-input-settlement.js").SessionInputSourceDelivery;
 } {
   const settlement = projectPendingFinalDeliveryState(entry, input, evidence);
   if (!input.cleanup) {
@@ -117,6 +118,25 @@ function projectPendingFinalDeliveryState(
     state: settled,
     ...(receipt ? { receipt } : {}),
   });
+  const complete =
+    updatedDeliveries.length > 0 &&
+    updatedDeliveries.every((member) => member.state === "delivered" && member.receipt);
+  const sourceDelivery =
+    complete && pending.sourceRunId
+      ? {
+          kind: pending.sourceOutcome ?? ("answer" as const),
+          responderRunId: pending.sourceRunId,
+          intentId: pending.intentId!,
+          deliveryId: updatedDeliveries.map((member) => member.id).join(":"),
+          context: pending.context,
+          platformMessageId: updatedDeliveries.at(-1)!.receipt!.platformMessageId,
+          resultCount: updatedDeliveries.reduce(
+            (sum, member) => sum + member.receipt!.resultCount,
+            0,
+          ),
+          settledAt: input.cleanup?.now ?? Date.now(),
+        }
+      : undefined;
   const clearsNotice =
     existingNotice?.state !== "acknowledged" &&
     !updatedDeliveries.some((delivery) => delivery.state === "unknown") &&
@@ -125,10 +145,11 @@ function projectPendingFinalDeliveryState(
     existingNotice?.intentId === pending.intentId;
   // One resolved sibling cannot erase another's ambiguity or owe an acknowledged notice again.
   if (settled === current && !owedNotice && !clearsNotice) {
-    return { patch: null, state: settled };
+    return { patch: null, state: settled, sourceDelivery };
   }
   return {
     state: settled,
+    sourceDelivery,
     patch: {
       pendingFinalDelivery: { ...pending, deliveries: updatedDeliveries },
       ...(clearsNotice ? { pendingDeliveryNotice: undefined } : owedNotice),

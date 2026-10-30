@@ -10,6 +10,15 @@ export type SessionPendingInputOwner = Omit<
   "preparedAuthority" | "sources"
 > & {
   sessionActor?: SessionActorStorageBinding;
+  settlement?: {
+    identity: import("./session-input-settlement.js").SessionInputSettlementIdentity;
+    read: () => Promise<
+      import("./session-input-settlement.js").SessionInputSourceDelivery | undefined
+    >;
+    write: (
+      delivery: import("./session-input-settlement.js").SessionInputSourceDelivery,
+    ) => Promise<void>;
+  };
   /** Immutable facts decoded from this owner's accepted bytes before projections escape. */
   requesterOrigin?: RequesterOrigin;
   /** Captured physical locator, or native incognito locator, for comparisons and workers. */

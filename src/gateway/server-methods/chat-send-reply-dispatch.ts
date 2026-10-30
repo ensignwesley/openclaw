@@ -28,6 +28,7 @@ import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/tr
 import { getOwnedSessionTranscriptReader } from "../../config/sessions/transcript-write-context.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
+import { readUserTurnSourceInputs } from "../../sessions/user-turn-source-delivery.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   extractAssistantPhaseText,
@@ -211,6 +212,14 @@ export function createChatSendReplyDispatch(params: {
       const assertRoutingCurrent = captureSessionMutationRouting(getRuntimeConfig(), undefined, [
         scope,
       ]);
+      const sourceInputs = await readUserTurnSourceInputs(
+        userTurnRecorder as UserTurnTranscriptRecorder,
+        () => {
+          if (!isInspectionCurrent()) throw new Error("Native reply source lost current admission");
+        },
+      );
+      const committedSources: Array<{ source: (typeof sourceInputs)[number]; messageId: string }> =
+        [];
       let decision: ReplyDeliveryState = "pending";
       let sourceDecision: ReplyDeliveryState = "missing";
       await readSessionTranscriptAnchorsAsync(
@@ -270,8 +279,39 @@ export function createChatSendReplyDispatch(params: {
             const answer = hasTools
               ? extractAssistantTextForPhase(message, { phase: "final_answer" })
               : extractAssistantPhaseText(message);
-            if (!answer || !extractAssistantPhaseText(projectChatDisplayMessage(message))) {
+            if (
+              message.stopReason === "error" ||
+              message.stopReason === "aborted" ||
+              !answer ||
+              !extractAssistantPhaseText(projectChatDisplayMessage(message))
+            ) {
               continue;
+            }
+            const segment = [
+              input,
+              ...(facts.tail?.entries.flatMap((candidate) =>
+                candidate.role === "user" && candidate.anchor ? [candidate.anchor] : [],
+              ) ?? []),
+            ]
+              .filter(
+                (candidate) =>
+                  row.anchor && candidate.activeMessagePosition < row.anchor.activeMessagePosition,
+              )
+              .toSorted((a, b) => b.activeMessagePosition - a.activeMessagePosition)[0];
+            const sourceInput = sourceInputs.find(
+              (source) => source.admission?.entryId === segment?.entryId,
+            );
+            if (
+              sourceInput &&
+              row.anchor &&
+              row.anchor.rawSeq > transcriptStart.afterSeq &&
+              !committedSources.some(
+                (previous) =>
+                  previous.source.identity!.idempotencyKey === sourceInput.identity!.idempotencyKey,
+              )
+            ) {
+              committedSources.push({ source: sourceInput, messageId: row.entryId });
+              sourceDecision = "delivered";
             }
             const selected = resolveChatReplyDeliveryFromAnchors({
               facts,
@@ -294,6 +334,19 @@ export function createChatSendReplyDispatch(params: {
         },
       );
       assertRoutingCurrent(getRuntimeConfig());
+      for (const { source: original, messageId } of committedSources) {
+        if (!isInspectionCurrent())
+          throw new Error("Native reply source changed before settlement");
+        await original.write!({
+          kind: "answer",
+          responderRunId: runId,
+          intentId: `native:${original.admission!.entryId}`,
+          deliveryId: messageId,
+          platformMessageId: messageId,
+          resultCount: 1,
+          settledAt: Date.now(),
+        });
+      }
       return isInspectionCurrent()
         ? { source: sourceDecision, terminal: decision }
         : { source: "missing", terminal: "missing" };

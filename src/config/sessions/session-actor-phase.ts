@@ -217,6 +217,13 @@ export function applySessionActorPhaseWithBackend(
     case "session.actor.completeTurn": {
       const { turn: input, bookkeeping } = command.input;
       const pendingFinalDelivery = command.input.pendingFinalDelivery;
+      if (
+        pendingFinalDelivery &&
+        requireEntry().pendingFinalDelivery &&
+        requireEntry().pendingFinalDelivery!.intentId !== pendingFinalDelivery.intentId
+      ) {
+        throw new SessionActorStaleStateError("Another final still owns source delivery custody");
+      }
       if (bookkeeping) {
         if (requireEntry().activeWriterRunId !== bookkeeping.writerRunId) {
           throw new SessionActorStaleStateError(
@@ -285,6 +292,17 @@ export function applySessionActorPhaseWithBackend(
         input.settlement,
         input.evidence,
       );
+      if (settlement.sourceDelivery) {
+        for (const source of entry.pendingFinalDelivery?.sourceInputs ?? []) {
+          backend.mutatePendingInput({
+            ...source,
+            kind: "source-delivery",
+            sessionKey,
+            sessionId: input.settlement.sessionId,
+            delivery: settlement.sourceDelivery,
+          });
+        }
+      }
       if (settlement.patch) {
         entryUpdate = { ...entry, ...settlement.patch };
       }

@@ -675,6 +675,7 @@ async function executeAgentTurnOutcome(
       internal.kind === "final"
         ? {
             kind: "rejected",
+            continuityDisposition: internal.continuityDisposition,
             sessionWriter: internal.sessionWriter,
             payload: internal.payload,
             resolved: internal.resolved,

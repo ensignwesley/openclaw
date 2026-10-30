@@ -53,3 +53,8 @@ export type SessionPendingInputAppend = {
 export type SessionInputCompletion = Selectable<SessionInputCompletions> & {
   outcome: AgentRunTerminalOutcome;
 };
+
+export type SessionInputSettlementRow = Selectable<SessionInputCompletions> & {
+  outcome?: AgentRunTerminalOutcome;
+  sourceDelivery?: import("./session-input-settlement.js").SessionInputSourceDelivery;
+};

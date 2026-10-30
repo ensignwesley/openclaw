@@ -54,6 +54,7 @@ export type AgentTurnInternalResult =
   | SettledAgentTurn
   | {
       kind: "final";
+      continuityDisposition?: import("./agent-runner-continuity-notice.js").ContinuityFailureDisposition;
       sessionWriter?: CompactionAccountingTarget;
       payload: ReplyPayload;
       resolved?: { provider: string; model: string };
@@ -98,6 +99,7 @@ export type AgentTurnExecutionResult = {
     | AbortedAgentTurn
     | {
         kind: "rejected";
+        continuityDisposition?: import("./agent-runner-continuity-notice.js").ContinuityFailureDisposition;
         sessionWriter?: CompactionAccountingTarget;
         compaction?: AgentTurnCompaction;
         payload: ReplyPayload;

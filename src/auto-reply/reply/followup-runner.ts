@@ -295,6 +295,23 @@ export function createFollowupRunner(
       ) {
         await onObservedReplyDelivery();
       }
+      if (
+        execution.execution.outcome.kind === "rejected" &&
+        execution.execution.outcome.continuityDisposition
+      ) {
+        const disposition = execution.execution.outcome.continuityDisposition;
+        if (
+          disposition === "answered" ||
+          disposition === "notified" ||
+          disposition === "saved-unanswered"
+        )
+          completion = { kind: "completed" };
+        else if (disposition === "cancelled") completion = { kind: "aborted" };
+        else {
+          completion = { kind: "progress" };
+          deliveryPending = true;
+        }
+      }
       const deliveryOpts = {
         ...defaults.opts,
         sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
@@ -311,6 +328,7 @@ export function createFollowupRunner(
             sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
             entry: turn.session.current(),
             writer: execution.execution.outcome.sessionWriter,
+            recorder: turn.queued.userTurnTranscriptRecorder,
             operation: turn.operation,
             activitySummaryCompletion,
             publish: (entry) => turn.session.publish(entry),

@@ -22,7 +22,7 @@ import {
   readSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
 import {
-  readSessionInputCompletion,
+  readSessionInputSettlementRow,
   readSessionPendingInputByKey,
   writeSessionInputCompletion,
   type SessionPendingInputRow,
@@ -33,6 +33,7 @@ import {
   readSessionActorTransactionState,
   writableSessionActorMap,
 } from "./session-actor-transaction.js";
+import { writeSessionInputSourceDelivery } from "./session-input-source-delivery.kernel.js";
 import { readSessionPendingInputAuthorityFactsInTransaction } from "./session-pending-input-authority.kernel.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import type {
@@ -53,12 +54,12 @@ function readPendingInputStage(
   input: Extract<PendingInputRead, { kind: "stage" }>,
   existing: SessionPendingInputRow | undefined,
 ): PendingInputSnapshot {
-  const previous =
-    input.trackCompletion && tableExists(database.db, SESSION_INPUT_COMPLETIONS_TABLE)
-      ? readSessionInputCompletion(database, input)
-      : undefined;
+  const previous = tableExists(database.db, SESSION_INPUT_COMPLETIONS_TABLE)
+    ? readSessionInputSettlementRow(database, input)
+    : undefined;
   const committed =
-    existing?.consumed_event_id != null || (previous && isFinalInputCompletion(previous.outcome))
+    existing?.consumed_event_id != null ||
+    (previous?.outcome && isFinalInputCompletion(previous.outcome))
       ? undefined
       : readTranscriptMessageByScopedIdempotencyKey(
           database,
@@ -90,7 +91,18 @@ export function readPendingInput(database: OpenClawAgentDatabase, input: Pending
     return readPendingInputSourceInDatabase(database, input);
   }
   if (readSessionEntryIdentity(database, input.sessionKey)?.sessionId !== input.sessionId) {
-    return { kind: "stage", current: false } satisfies PendingInputSnapshot;
+    return input.kind === "settlement"
+      ? { kind: "settlement" as const, current: false }
+      : ({ kind: "stage", current: false } satisfies PendingInputSnapshot);
+  }
+  if (input.kind === "settlement") {
+    return {
+      kind: "settlement" as const,
+      current: true,
+      row: tableExists(database.db, SESSION_INPUT_COMPLETIONS_TABLE)
+        ? readSessionInputSettlementRow(database, input)
+        : undefined,
+    };
   }
   return readPendingInputStage(
     database,
@@ -218,6 +230,8 @@ export function mutatePendingInput(
             actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
             actor.pendingInputs.set(input.idempotencyKey, receipt.stagedInput);
           }
+        } else if (input.kind === "source-delivery") {
+          receipt.sourceDelivery = writeSessionInputSourceDelivery(current, input, input.delivery);
         } else if (input.kind === "complete") {
           if (!tableExists(current.db, SESSION_INPUT_COMPLETIONS_TABLE)) {
             ensureSessionInputCompletionsSchema(current.db);

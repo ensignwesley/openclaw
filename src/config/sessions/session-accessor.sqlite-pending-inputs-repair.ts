@@ -1,4 +1,4 @@
-import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
+import { classifyAgentRunTerminalOutcome } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -14,6 +14,11 @@ import {
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { readSessionPendingInputByKey } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import {
+  decodeSessionInputSettlement,
+  encodeSessionInputSettlement,
+  mergeSessionInputSettlement,
+} from "./session-input-settlement.js";
 import { isFinalInputCompletion } from "./session-pending-input-value.js";
 
 type PendingInputDatabase = Pick<OpenClawAgentDatabase, "db" | "path">;
@@ -157,18 +162,27 @@ export function copySessionInputCompletionsForRepair(
       ) {
         throw new Error("Canonical repair found conflicting input completions");
       }
-      // SAFETY: the feature-owned receipt writer persists typed terminal outcomes.
-      const existingOutcome = JSON.parse(existing.outcome_json) as AgentRunTerminalOutcome;
-      // A Stop is final even though it is not successful. Never replace a final
-      // destination receipt with an older/retryable source attempt.
-      if (isFinalInputCompletion(existingOutcome)) {
-        continue;
-      }
-      // SAFETY: repair preserves feature-owned typed outcomes, just like the receipt reader.
-      const outcome = JSON.parse(row.outcome_json) as AgentRunTerminalOutcome;
-      if (!isFinalInputCompletion(outcome) && existing.completed_at >= row.completed_at) {
-        continue;
-      }
+      const previous = decodeSessionInputSettlement(existing.outcome_json);
+      const incoming = decodeSessionInputSettlement(row.outcome_json);
+      const processing =
+        previous.processing && isFinalInputCompletion(previous.processing)
+          ? previous.processing
+          : incoming.processing &&
+              (isFinalInputCompletion(incoming.processing) ||
+                row.completed_at > existing.completed_at)
+            ? incoming.processing
+            : previous.processing;
+      const merged = mergeSessionInputSettlement(
+        { ...previous, processing: undefined },
+        { ...incoming, processing },
+      );
+      row.outcome_json = encodeSessionInputSettlement(merged);
+      row.succeeded = processing
+        ? classifyAgentRunTerminalOutcome(processing) === "success"
+          ? 1
+          : 0
+        : 0;
+      row.completed_at = Math.max(existing.completed_at, row.completed_at);
     }
     const canonical = { ...row, session_key: canonicalKey };
     executeSqliteQuerySync(

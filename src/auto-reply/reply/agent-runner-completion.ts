@@ -16,6 +16,8 @@ import { logVerbose } from "../../globals.js";
 import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
+import { readUserTurnSourceInputs } from "../../sessions/user-turn-source-delivery.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { AgentTurnCompletion } from "./agent-runner-completion.types.js";
 
 /** One retained terminal owner, including no-send and exceptional completion. */
@@ -27,6 +29,7 @@ export async function withAgentTurnCompletion<T>(
     entry?: SessionEntry;
     writer?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "activeWriterRunId">;
     operation: ReplyOperation;
+    recorder?: UserTurnTranscriptRecorder;
     activitySummaryCompletion?: SessionActivitySummaryCompletion;
     publish(entry: SessionEntry): void;
   },
@@ -106,6 +109,22 @@ export async function withAgentTurnCompletion<T>(
               throw new Error("Final delivery custody is already settled");
             }
             return snapshot.entry!;
+          }
+          if (pendingFinalDelivery) {
+            const sources = await readUserTurnSourceInputs(params.recorder, assertCurrent);
+            pendingFinalDelivery = {
+              ...pendingFinalDelivery,
+              sourceRunId: pendingFinalDelivery.sourceRunId ?? expected.writerRunId,
+              sourceInputs: sources
+                .filter(
+                  (source) =>
+                    !pendingFinalDelivery!.sourceInputs ||
+                    pendingFinalDelivery!.sourceInputs.some(
+                      (selected) => selected.idempotencyKey === source.identity!.idempotencyKey,
+                    ),
+                )
+                .map((source) => source.identity!),
+            };
           }
           finished = true;
           await refresh();
