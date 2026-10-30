@@ -105,3 +105,38 @@ export function resolveChatReplyDeliveryFromAnchors(params: {
   }
   return "delivered";
 }
+
+/** Historical receipt association is not latest-input display eligibility. */
+export function resolveChatReplySourceInput(params: {
+  facts: SessionTranscriptAnchorFacts;
+  messageId: string;
+  admissionIds: readonly string[];
+  afterSeq: number;
+}): string | undefined {
+  const { facts } = params;
+  const message = facts.tail?.entries.find((row) => row.entryId === params.messageId)?.anchor;
+  if (
+    !message ||
+    !facts.watermark ||
+    message.rawSeq <= params.afterSeq ||
+    message.generation !== facts.watermark.generation ||
+    facts.tail?.lastSeq !== facts.watermark.maxSeq
+  ) {
+    return undefined;
+  }
+  const inputs = [
+    ...facts.anchors,
+    ...(facts.tail?.entries.flatMap((row) =>
+      row.role === "user" && row.anchor ? [row.anchor] : [],
+    ) ?? []),
+  ]
+    .filter(
+      (anchor) =>
+        anchor.activeMessagePosition < message.activeMessagePosition &&
+        (params.admissionIds.includes(anchor.entryId) ||
+          facts.tail?.entries.some((row) => row.role === "user" && row.entryId === anchor.entryId)),
+    )
+    .toSorted((left, right) => right.activeMessagePosition - left.activeMessagePosition);
+  const input = inputs[0];
+  return input && params.admissionIds.includes(input.entryId) ? input.entryId : undefined;
+}

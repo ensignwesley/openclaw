@@ -299,15 +299,16 @@ export function createFollowupRunner(
         execution.execution.outcome.kind === "rejected" &&
         execution.execution.outcome.continuityDisposition
       ) {
-        const disposition = execution.execution.outcome.continuityDisposition;
+        const continuityDisposition = execution.execution.outcome.continuityDisposition;
         if (
-          disposition === "answered" ||
-          disposition === "notified" ||
-          disposition === "saved-unanswered"
-        )
+          continuityDisposition === "answered" ||
+          continuityDisposition === "notified" ||
+          continuityDisposition === "saved-unanswered"
+        ) {
           completion = { kind: "completed" };
-        else if (disposition === "cancelled") completion = { kind: "aborted" };
-        else {
+        } else if (continuityDisposition === "cancelled") {
+          completion = { kind: "aborted" };
+        } else {
           completion = { kind: "progress" };
           deliveryPending = true;
         }

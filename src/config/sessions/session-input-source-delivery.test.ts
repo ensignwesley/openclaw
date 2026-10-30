@@ -1,11 +1,16 @@
 import { expect, it } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import {
   ensureSessionInputCompletionsSchema,
   ensureSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { copySessionInputCompletionsForRepair } from "./session-accessor.sqlite-pending-inputs-repair.js";
 import {
   readSessionInputCompletion,
   readSessionInputSettlementRow,
@@ -36,7 +41,7 @@ const delivery = (key: string) => ({
 it.each(["sqlite", "memory"])(
   "keeps exact A/B receipts under one responder and separates receipt-first processing (%s)",
   (backend) =>
-    withOpenClawTestState({ scenario: "minimal" }, () => {
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = createSessionCompoundWorkerFixture();
       const scope = { sessionKey: f.scope.sessionKey, sessionId: f.scope.sessionId };
       const state = createSessionActorMemoryState({
@@ -94,10 +99,11 @@ it.each(["sqlite", "memory"])(
       expect(read("A")?.sourceDelivery?.platformMessageId).toBe("final-A");
       expect(read("B")?.sourceDelivery?.platformMessageId).toBe("final-B");
       expect(read("A")?.outcome).toBeUndefined();
-      if (backend === "sqlite")
+      if (backend === "sqlite") {
         expect(
           readSessionInputCompletion(f.database, { ...scope, idempotencyKey: "A" }),
         ).toBeUndefined();
+      }
       complete("A");
       attach("A");
       expect(read("A")?.outcome?.reason).toBe("completed");
@@ -150,6 +156,7 @@ it("publishes a receipt only after every identified pending-final member settles
       {
         type: "session.actor.deliverySettled",
         input: {
+          target: state.hot.target,
           commandId: deliveryId,
           phaseId: deliveryId,
           settlement: {
@@ -176,13 +183,13 @@ it("publishes a receipt only after every identified pending-final member settles
         },
         mutatePendingInput: memory.mutate,
         turn() {
-          throw Error("unexpected turn");
+          throw new Error("unexpected turn");
         },
         append() {
-          throw Error("unexpected append");
+          throw new Error("unexpected append");
         },
         appendEvent() {
-          throw Error("unexpected event");
+          throw new Error("unexpected event");
         },
         validateSources() {
           return { conversationMatches: [] };
@@ -202,3 +209,94 @@ it("publishes a receipt only after every identified pending-final member settles
   expect(state.completions.get("A")?.sourceDelivery?.resultCount).toBe(2);
   expect(state.hot.entry.pendingFinalDelivery).toBeUndefined();
 });
+
+it("retains immutable native receipt bytes after the memory caller releases its projection", () => {
+  const state = createSessionActorMemoryState({
+    sessionKey: "agent:main:immutable",
+    database: { kind: "memory", handle: "proof", incarnation: "one" },
+  });
+  state.hot.entry = { sessionId: "s", updatedAt: 1 };
+  const memory = createSessionActorMemoryPending(state, {
+    agentId: "main",
+    path: "memory",
+    admit() {},
+  });
+  const provided = delivery("A");
+  memory.mutate({
+    ...identity("A"),
+    sessionKey: "agent:main:immutable",
+    sessionId: "s",
+    kind: "source-delivery",
+    delivery: provided,
+  });
+  provided.platformMessageId = "mutated-projection";
+  expect(state.completions.get("A")?.sourceDelivery?.platformMessageId).toBe("final-A");
+});
+
+it("canonical repair retains a receipt beside final processing and rejects divergent terminal receipts", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = createSessionCompoundWorkerFixture();
+    const destination = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: `${f.database.path}.destination`,
+    });
+    const scope = { sessionKey: f.scope.sessionKey, sessionId: f.scope.sessionId };
+    const sourceWrite = <T>(run: () => T) =>
+      runOpenClawAgentWriteTransaction(run, { agentId: "main", path: f.database.path });
+    const destinationWrite = <T>(run: () => T) =>
+      runOpenClawAgentWriteTransaction(run, { agentId: "main", path: destination.path });
+    sourceWrite(() => {
+      ensureSessionPendingInputsSchema(f.database.db);
+      ensureSessionInputCompletionsSchema(f.database.db);
+      writeSessionInputSourceDelivery(f.database, { ...scope, ...identity("A") }, delivery("A"));
+    });
+    destinationWrite(() => {
+      writeSessionEntry(destination, scope.sessionKey, {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+      });
+      ensureSessionPendingInputsSchema(destination.db);
+      ensureSessionInputCompletionsSchema(destination.db);
+      writeSessionInputCompletion(
+        destination,
+        { ...scope, ...identity("A") },
+        buildAgentRunTerminalOutcome({ status: "ok" }),
+      );
+      copySessionInputCompletionsForRepair(
+        f.database,
+        destination,
+        [scope.sessionKey],
+        scope.sessionKey,
+      );
+    });
+    expect(
+      readSessionInputSettlementRow(destination, { ...scope, idempotencyKey: "A" }),
+    ).toMatchObject({
+      outcome: { reason: "completed" },
+      sourceDelivery: { platformMessageId: "final-A" },
+    });
+    sourceWrite(() =>
+      writeSessionInputSourceDelivery(
+        f.database,
+        { ...scope, ...identity("conflict") },
+        delivery("A"),
+      ),
+    );
+    destinationWrite(() =>
+      writeSessionInputSourceDelivery(
+        destination,
+        { ...scope, ...identity("conflict") },
+        delivery("B"),
+      ),
+    );
+    expect(() =>
+      destinationWrite(() =>
+        copySessionInputCompletionsForRepair(
+          f.database,
+          destination,
+          [scope.sessionKey],
+          scope.sessionKey,
+        ),
+      ),
+    ).toThrow("different terminal delivery");
+  }));

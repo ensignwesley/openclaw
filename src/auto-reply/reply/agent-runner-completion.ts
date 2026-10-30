@@ -13,6 +13,7 @@ import { buildSessionTranscriptTurnExpectedState } from "../../config/sessions/s
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
 import { logVerbose } from "../../globals.js";
+import { sourceInputMatchesDeliveryContext } from "../../infra/outbound/source-reply-input-context.js";
 import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
@@ -103,7 +104,8 @@ export async function withAgentTurnCompletion<T>(
           }
           prepared.push(reducer);
         },
-        async complete(pendingFinalDelivery) {
+        async complete(preparedFinalDelivery) {
+          let pendingFinalDelivery = preparedFinalDelivery;
           if (finished) {
             if (pendingFinalDelivery) {
               throw new Error("Final delivery custody is already settled");
@@ -118,10 +120,14 @@ export async function withAgentTurnCompletion<T>(
               sourceInputs: sources
                 .filter(
                   (source) =>
-                    !pendingFinalDelivery!.sourceInputs ||
-                    pendingFinalDelivery!.sourceInputs.some(
-                      (selected) => selected.idempotencyKey === source.identity!.idempotencyKey,
-                    ),
+                    sourceInputMatchesDeliveryContext(
+                      source.origin,
+                      pendingFinalDelivery!.context,
+                    ) &&
+                    (!pendingFinalDelivery!.sourceInputs ||
+                      pendingFinalDelivery!.sourceInputs.some(
+                        (selected) => selected.idempotencyKey === source.identity!.idempotencyKey,
+                      )),
                 )
                 .map((source) => source.identity!),
             };

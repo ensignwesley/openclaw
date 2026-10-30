@@ -16,6 +16,7 @@ import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
 } from "../../agents/run-termination.js";
+import { SessionTranscriptContinuityError } from "../../agents/sessions/transcript-turn-error.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-projection.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
@@ -521,4 +522,24 @@ it("forwards sanitized generic errors on external chat channels when verbose is 
   expect(payload.text).toBe(
     "⚠️ Agent failed before reply: INVALID_ARGUMENT: some other failure. Please try again, or use /new to start a fresh session.",
   );
+});
+
+it("defers a typed continuity attempt to exact original-input settlement without generic loss copy", async () => {
+  state.runWithModelFallbackMock.mockRejectedValueOnce(
+    new SessionTranscriptContinuityError(
+      "missing_active_anchor",
+      "Session transcript anchor was not returned: synthetic-input-a",
+    ),
+  );
+  const result = await runRawTurn(createRunAgentTurnParams(createFollowupRun()));
+  expect(result.outcome).toMatchObject({
+    kind: "rejected",
+    continuityDisposition: "unknown",
+    payload: { text: "" },
+  });
+  expect(terminalEvents(result.runId)).toEqual([
+    expect.objectContaining({
+      data: expect.objectContaining({ phase: "error", suppressErrorNotice: true }),
+    }),
+  ]);
 });

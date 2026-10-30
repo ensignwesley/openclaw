@@ -11,6 +11,7 @@ import type { MessageActionAuthorization } from "../../gateway/message-action-tu
 import { readUserTurnSourceInputs } from "../../sessions/user-turn-source-delivery.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
+import { sourceInputMatchesDeliveryContext } from "./source-reply-input-context.js";
 
 /** Reuse pending-final for source-tool ambiguity; no second recovery/store/queue. */
 export async function prepareSourceInputFinalDelivery(params: {
@@ -36,11 +37,17 @@ export async function prepareSourceInputFinalDelivery(params: {
         input.sessionId !== params.sessionId ||
         !input.consumed,
     )
-  )
+  ) {
     return undefined;
+  }
+  if (originals.some((input) => !sourceInputMatchesDeliveryContext(input.origin, params.context))) {
+    return undefined;
+  }
   const receipts = await Promise.all(originals.map((input) => input.read!()));
   source.assertCurrent();
-  if (receipts.every(Boolean)) return "answered";
+  if (receipts.every(Boolean)) {
+    return "answered";
+  }
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.agentId,
   });
@@ -55,9 +62,12 @@ export async function prepareSourceInputFinalDelivery(params: {
         },
       });
       const entry = snapshot.entry;
-      if (!entry || entry.sessionId !== params.sessionId)
+      if (!entry || entry.sessionId !== params.sessionId) {
         throw new Error("Source final session changed");
-      if (entry.pendingFinalDelivery) return "pending";
+      }
+      if (entry.pendingFinalDelivery) {
+        return "pending";
+      }
       const intentId = randomUUID(),
         deliveryId = randomUUID();
       const authority: SessionActorAuthority = {
@@ -67,8 +77,9 @@ export async function prepareSourceInputFinalDelivery(params: {
           if (
             facts.entry?.sessionId !== params.sessionId ||
             facts.entry.lifecycleRevision !== entry.lifecycleRevision
-          )
+          ) {
             throw new Error("Source final lifetime changed");
+          }
         },
       };
       const outcome = await runSessionActorCommand(actor, authority, async (current) => {
@@ -100,8 +111,9 @@ export async function prepareSourceInputFinalDelivery(params: {
           authority,
         );
       });
-      if (outcome.kind !== "committed" || outcome.failure)
+      if (outcome.kind !== "committed" || outcome.failure) {
         throw new Error("Source final custody was not committed");
+      }
       return {
         kind: "pending-final",
         agentId: params.agentId,

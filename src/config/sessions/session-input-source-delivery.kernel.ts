@@ -4,6 +4,7 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureSessionInputCompletionsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { readSessionInputSettlementRow } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { MAX_SESSION_ACTOR_COMPLETIONS } from "./session-actor-hydration.types.js";
 import {
   readSessionActorTransactionState,
   writableSessionActorMap,
@@ -23,10 +24,12 @@ export function writeSessionInputSourceDelivery(
   delivery: SessionInputSourceDelivery,
 ): SessionInputSourceDelivery {
   ensureSessionInputCompletionsSchema(database.db);
-  const retained = readSessionInputSettlementRow(database, scope);
+  const retained = readSessionInputSettlementRow(database, scope, true);
   if (
     retained &&
-    (retained.run_id !== scope.runId || retained.request_hash !== scope.requestHash)
+    (retained.session_key !== scope.sessionKey ||
+      retained.run_id !== scope.runId ||
+      retained.request_hash !== scope.requestHash)
   ) {
     throw new SessionPendingInputCustodyError("Source delivery conflicts with the accepted input");
   }
@@ -58,6 +61,10 @@ export function writeSessionInputSourceDelivery(
   if (actor) {
     actor.completions = writableSessionActorMap(actor.completions);
     actor.completions.set(scope.idempotencyKey, row);
+    if (actor.completions.size > MAX_SESSION_ACTOR_COMPLETIONS) {
+      actor.completions.delete(actor.completions.keys().next().value!);
+      actor.completionsComplete = false;
+    }
   }
   return value.sourceDelivery!;
 }

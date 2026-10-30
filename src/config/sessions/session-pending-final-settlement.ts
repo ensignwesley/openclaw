@@ -93,8 +93,9 @@ function projectPendingFinalDeliveryState(
         normalizeDeliveryContext(context),
       ));
   // An unverified "delivered" callback cannot discharge exact-input custody.
-  if (!terminal && settled === "delivered" && pending.sourceInputs?.length && !validResult)
+  if (!terminal && settled === "delivered" && pending.sourceInputs?.length && !validResult) {
     settled = "unknown";
+  }
   const existingNotice = entry.pendingDeliveryNotice;
   const owedNotice =
     settled === "unknown" &&

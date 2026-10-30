@@ -5,6 +5,7 @@ import path from "node:path";
 import { expect, test, vi } from "vitest";
 import * as transcriptPersistence from "../src/agents/sessions/agent-session-transcript.js";
 import { SessionTranscriptContinuityError } from "../src/agents/sessions/transcript-turn-error.js";
+import { preparePendingInputStore } from "../src/config/sessions/session-pending-input-store.js";
 import { startGatewayServer } from "../src/gateway/server.js";
 import { reserveGatewayTestListener } from "../src/gateway/test-helpers.listener.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
@@ -34,7 +35,9 @@ test("does not report an unanswered input after a native final commits before co
     bindError: "continuity fixture not listening",
     onRequest: async (request, response) => {
       const chunks: Buffer[] = [];
-      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      for await (const chunk of request) {
+        chunks.push(Buffer.from(chunk));
+      }
       const item = {
         type: "message",
         id: "msg_continuity",
@@ -94,7 +97,9 @@ test("does not report an unanswered input after a native final commits before co
   const captureProxy = createServer((request, response) => {
     void (async () => {
       const chunks: Buffer[] = [];
-      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      for await (const chunk of request) {
+        chunks.push(Buffer.from(chunk));
+      }
       const body = Buffer.concat(chunks);
       const requestPhase = phase;
       const upstream = httpRequest(
@@ -136,7 +141,9 @@ test("does not report an unanswered input after a native final commits before co
     captureProxy.listen(0, "127.0.0.1", resolve);
   });
   const proxyAddress = captureProxy.address();
-  if (!proxyAddress || typeof proxyAddress === "string") throw Error("Capture proxy not listening");
+  if (!proxyAddress || typeof proxyAddress === "string") {
+    throw new Error("Capture proxy not listening");
+  }
   const captureProxyUrl = `http://127.0.0.1:${proxyAddress.port}`;
   const native = transcriptPersistence.persistAgentSessionMessage;
   const records: Array<{
@@ -149,7 +156,9 @@ test("does not report an unanswered input after a native final commits before co
     .mockImplementation(async (...args) => {
       const entryId = await native(...args);
       const message = args[1];
-      if (message.role === "user") records.push({ kind: "admitted-user", entryId });
+      if (message.role === "user") {
+        records.push({ kind: "admitted-user", entryId });
+      }
       if (
         message.role === "assistant" &&
         message.stopReason !== "error" &&
@@ -192,8 +201,9 @@ test("does not report an unanswered input after a native final commits before co
           ["final", "error", "aborted"].includes(payload.state ?? "")
         );
       })
-    )
+    ) {
       terminal.resolve();
+    }
   };
   try {
     const config = createOpenAiResponsesModelConfig({
@@ -259,7 +269,10 @@ test("does not report an unanswered input after a native final commits before co
       timeoutMs: 120000,
     });
     await withinTest(terminal.promise, context.signal);
-    const history = await client.request("chat.history", { sessionKey, limit: 20 });
+    const history = await client.request<{ sessionId: string; messages: unknown[] }>(
+      "chat.history",
+      { sessionKey, limit: 20 },
+    );
     await fs.writeFile(
       path.join(destination, "completion.json"),
       JSON.stringify({ accepted, settled, history, events, records }, null, 2),
@@ -275,6 +288,34 @@ test("does not report an unanswered input after a native final commits before co
       );
     });
     expect(errors).toHaveLength(0);
+    // Silence alone could pass while durable original-input receipt custody stays broken.
+    const sourceStore = await preparePendingInputStore(
+      { agentId: "main", sessionKey, sessionId: history.sessionId },
+      () => {},
+    );
+    try {
+      const source = await sourceStore.read({
+        kind: "settlement",
+        sessionKey,
+        sessionId: history.sessionId,
+        idempotencyKey: "synthetic-native-before-observation:user",
+      });
+      await fs.writeFile(
+        path.join(destination, "source-settlement.json"),
+        JSON.stringify(source, null, 2),
+      );
+      expect(source.kind).toBe("settlement");
+      if (source.kind !== "settlement") {
+        throw new Error("Native source settlement returned another operation");
+      }
+      expect(source.row?.sourceDelivery).toMatchObject({
+        kind: "answer",
+        responderRunId: accepted.runId,
+        platformMessageId: records.find((row) => row.kind === "native-final-committed")!.entryId,
+      });
+    } finally {
+      await sourceStore.release();
+    }
   } finally {
     await runQaGatewayFixture(
       async () => {},
@@ -290,9 +331,15 @@ test("does not report an unanswered input after a native final commits before co
         fs.writeFile(path.join(destination, "transport.json"), JSON.stringify(transport, null, 2)),
       () => {
         captureProxy.closeAllConnections();
-        return new Promise<void>((resolve, reject) =>
-          captureProxy.close((error) => (error ? reject(error) : resolve())),
-        );
+        return new Promise<void>((resolve, reject) => {
+          captureProxy.close((error) => {
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          });
+        });
       },
       () => model.close(),
       () =>

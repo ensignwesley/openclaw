@@ -86,7 +86,7 @@ type AgentRuntimeMessageActionContextBase = MessageActionRequesterIdentity & {
   /** Process-local owner reference revalidated before privileged Gateway use. */
   turnCapability?: string;
   sessionId?: string;
-  /** Durable session entry that owns restart-recovery receipt state. */
+  /** Session whose existing final-delivery owner records the original input's receipt. */
   sourceReplySessionKey?: string;
   toolContext?: InternalChannelThreadingToolContext;
 };
@@ -421,8 +421,9 @@ export function resolveMessageActionTurnAuthorization(
                   if (
                     resolveStoredMessageActionTurnCapability(params) !== capability ||
                     capability.inputRecorder !== inputRecorder
-                  )
+                  ) {
                     throw new Error("Original input turn capability is no longer current");
+                  }
                 },
               },
             }

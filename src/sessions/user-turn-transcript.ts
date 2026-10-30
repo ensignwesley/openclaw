@@ -9,7 +9,6 @@ import {
 import {
   readSessionPendingInputRequesterOrigin,
   readWithdrawnSessionPendingInputId,
-  stageSessionPendingInput,
 } from "../config/sessions/session-accessor.pending-inputs.js";
 import {
   registerUserTurnInputActor,
@@ -24,12 +23,16 @@ import {
   createDynamicSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { registerUserTurnSourceOwner } from "./user-turn-source-delivery.js";
 import {
   getUserTurnTranscriptAdmissionOwner,
-  registerUserTurnTranscriptAdmissionOwner,
   inheritUserTurnPromptReactionSource,
 } from "./user-turn-transcript-admission.js";
-import { persistUserTurnInput, stageUserTurnPendingInput } from "./user-turn-transcript-media.js";
+import {
+  persistUserTurnInput,
+  stageUserTurnPendingInput,
+  reportUserTurnPersistenceError,
+} from "./user-turn-transcript-media.js";
 import { createUserTurnProcessingCompletion } from "./user-turn-transcript-processing.js";
 import {
   capturePersistedModelPromptProjection,
@@ -175,23 +178,7 @@ export function createUserTurnTranscriptRecorder(
       : next;
   };
 
-  const handlePersistenceError = (error: unknown) => {
-    if (params.onPersistenceError) {
-      try {
-        params.onPersistenceError(error);
-      } catch {
-        // Diagnostics cannot change an already committed transcript outcome.
-      }
-      return;
-    }
-    void import("../globals.js")
-      .then(({ logVerbose }) => {
-        logVerbose(
-          `failed to persist ${params.errorContext ?? "user turn transcript"}: ${String(error)}`,
-        );
-      })
-      .catch(() => undefined);
-  };
+  const handlePersistenceError = (error: unknown) => reportUserTurnPersistenceError(params, error);
 
   const resolveMessageForPersistence = async (): Promise<PersistedUserTurnMessage | undefined> => {
     if (!params.message && params.resolveInput && !resolvedMessagePromise) {
@@ -723,38 +710,22 @@ export function createUserTurnTranscriptRecorder(
   registerUserTurnInputActor(recorder, (binding) => {
     inputActorBinding = binding;
   });
-  registerUserTurnTranscriptAdmissionOwner(recorder, {
-    sources: params.pendingInputSources,
-    ensureSource: async (assertCurrent) => {
-      if (
-        !pendingInput &&
-        admissionReceipt &&
-        admittedMessage?.idempotencyKey &&
-        !params.pendingInputSources?.length
-      ) {
-        const captured = admissionReceipt;
-        pendingInput = await stageSessionPendingInput(captured, {
-          message: admittedMessage,
-          runId: admittedMessage.idempotencyKey,
-          requestFingerprint: params.pendingInputRequestFingerprint,
-          assertCurrent: () => {
-            assertCurrent();
-            if (admissionReceipt !== captured) throw new Error("Input source admission changed");
-          },
-        });
-      }
-      return pendingInput;
+  registerUserTurnSourceOwner(
+    recorder,
+    params,
+    {
+      requesterOrigin: () =>
+        pendingInput ? readSessionPendingInputRequesterOrigin(pendingInput) : requesterOrigin,
+      pendingInput: () => pendingInput,
+      withdrawnInputId: () => readWithdrawnSessionPendingInputId(pendingInput),
+      receipt: () => admissionReceipt,
+      message: () => admittedMessage,
+      blocked: () => blocked || confirmedSteerTargetRunId !== undefined,
+      sentToProvider: () => sentToProvider,
+      refresh: refreshAdmission,
     },
-    requesterOrigin: () =>
-      pendingInput ? readSessionPendingInputRequesterOrigin(pendingInput) : requesterOrigin,
-    pendingInput: () => pendingInput,
-    withdrawnInputId: () => readWithdrawnSessionPendingInputId(pendingInput),
-    receipt: () => admissionReceipt,
-    message: () => admittedMessage,
-    blocked: () => blocked || confirmedSteerTargetRunId !== undefined,
-    sentToProvider: () => sentToProvider,
-    refresh: refreshAdmission,
-  });
+    adoptPendingInput,
+  );
   inheritUserTurnPromptReactionSource(recorder, params.pendingInputSources);
   return recorder;
 }

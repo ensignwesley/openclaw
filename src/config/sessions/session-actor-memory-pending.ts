@@ -131,12 +131,13 @@ export function createSessionActorMemoryPending(
       if (input.kind === "stage") {
         return readStage(input);
       }
-      if (input.kind === "settlement")
+      if (input.kind === "settlement") {
         return {
           kind: "settlement",
           current: owns(input),
           row: owns(input) ? structuredClone(completion(input)) : undefined,
         };
+      }
       const snapshot: PendingInputSourceSnapshot = { kind: "source", current: owns(input) };
       if (!snapshot.current) {
         return snapshot;
@@ -289,10 +290,13 @@ export function createSessionActorMemoryPending(
         state.pendingInputs.set(input.idempotencyKey, staged);
         receipt.stagedInput = structuredClone(staged);
       } else if (input.kind === "source-delivery") {
-        const retained = completion(input);
+        const retained = state.completions.get(input.idempotencyKey);
         if (
           retained &&
-          (retained.run_id !== input.runId || retained.request_hash !== input.requestHash)
+          (retained.session_key !== input.sessionKey ||
+            retained.session_id !== input.sessionId ||
+            retained.run_id !== input.runId ||
+            retained.request_hash !== input.requestHash)
         ) {
           throw new SessionPendingInputCustodyError(
             "Source delivery conflicts with the accepted input",
@@ -300,7 +304,7 @@ export function createSessionActorMemoryPending(
         }
         const value = mergeSessionInputSettlement(
           { processing: retained?.outcome, sourceDelivery: retained?.sourceDelivery },
-          { sourceDelivery: input.delivery },
+          { sourceDelivery: structuredClone(input.delivery) },
         );
         state.completions.set(input.idempotencyKey, {
           session_key: input.sessionKey,
@@ -316,10 +320,13 @@ export function createSessionActorMemoryPending(
         });
         receipt.sourceDelivery = structuredClone(value.sourceDelivery);
       } else if (input.kind === "complete") {
-        const retained = completion(input);
+        const retained = state.completions.get(input.idempotencyKey);
         if (
           retained &&
-          (retained.run_id !== input.runId || retained.request_hash !== input.requestHash)
+          (retained.session_key !== input.sessionKey ||
+            retained.session_id !== input.sessionId ||
+            retained.run_id !== input.runId ||
+            retained.request_hash !== input.requestHash)
         ) {
           throw new SessionPendingInputCustodyError(
             "Input completion conflicts with the accepted input",

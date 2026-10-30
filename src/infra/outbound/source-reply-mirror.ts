@@ -20,9 +20,9 @@ import { appendAssistantMessageToSessionTranscript } from "../../config/sessions
 import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { normalizeAccountId } from "../../routing/session-key.js";
+import { resolveAgentIdFromSessionKey, normalizeAccountId } from "../../routing/session-key.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
+import { isPlatformMessageNotDispatchedError, isOutboundDeliveryError } from "./deliver-types.js";
 import { settlePendingFinalDelivery } from "./delivery-completion.js";
 import { resolveImplicitMessageActionTarget } from "./message-action-normalization.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
@@ -435,9 +435,16 @@ export async function prepareTerminalSourceInputReply(params: SourceReplyTranscr
     !params.sessionKey ||
     !params.toolCallId ||
     !runId ||
-    !isCurrentSourceConversation(params, true)
-  )
+    !(
+      isCurrentSourceConversation(params, true) ||
+      (params.action === "react" &&
+        params.actionParams.remove !== true &&
+        Boolean(normalizeOptionalString(params.actionParams.emoji)) &&
+        isDeliveredCurrentSourceReplyAction(params))
+    )
+  ) {
     return undefined;
+  }
   return prepareSourceInputFinalDelivery({
     source: params.currentInput,
     cfg: params.cfg,
@@ -448,29 +455,52 @@ export async function prepareTerminalSourceInputReply(params: SourceReplyTranscr
     toolCallId: params.toolCallId,
     context: {
       channel: params.channel,
-      to: resolveSourceReplyTarget(params.actionParams),
+      to:
+        resolveSourceReplyTarget(params.actionParams) ??
+        params.toolContext?.currentMessagingTarget ??
+        params.toolContext?.currentChannelId,
       accountId: params.accountId ?? undefined,
       threadId: params.toolContext?.currentThreadTs,
     },
   });
 }
 
+export async function cancelTerminalSourceInputReply(
+  completion: Awaited<ReturnType<typeof prepareTerminalSourceInputReply>>,
+) {
+  if (completion && typeof completion !== "string") {
+    await settlePendingFinalDelivery(completion, "suppressed", ["prepared"], {
+      clearAfterSettled: true,
+    });
+  }
+}
+
 export async function settleTerminalSourceInputReply(
   completion: Awaited<ReturnType<typeof prepareTerminalSourceInputReply>>,
   params: SourceReplyTranscriptMirrorParams,
+  error?: unknown,
 ) {
-  if (!completion || typeof completion === "string") return;
+  if (!completion || typeof completion === "string") {
+    return;
+  }
   const fact = projectPluginMessageDeliveryFact(params.deliveredPayload);
   const identified =
     fact?.status === "settled" &&
     !fact.partialDelivery &&
-    matchesDeliveredSourceTargets(params, fact) &&
-    isCurrentSourceConversation(params, true)
-      ? fact.primaryPlatformMessageId
+    (await isDeliveredCurrentSourceReplyAsync(params))
+      ? (fact.primaryPlatformMessageId ??
+        (params.action === "react"
+          ? normalizeMessageIdValue(params.toolContext?.currentMessageId)
+          : undefined))
       : undefined;
+  const notDispatched =
+    isPlatformMessageNotDispatchedError(error) ||
+    (isOutboundDeliveryError(error) &&
+      !error.sentBeforeError &&
+      isPlatformMessageNotDispatchedError(error.cause));
   const state = identified
     ? "delivered"
-    : fact && fact.status !== "settled"
+    : notDispatched || fact?.status === "suppressed" || fact?.status === "dryRun"
       ? "suppressed"
       : "unknown";
   await settlePendingFinalDelivery(completion, state, undefined, {
@@ -481,7 +511,11 @@ export async function settleTerminalSourceInputReply(
             messageId: identified,
             target: {
               kind: "chat" as const,
-              id: resolveSourceReplyTarget(params.actionParams) ?? "",
+              id:
+                resolveSourceReplyTarget(params.actionParams) ??
+                params.toolContext?.currentMessagingTarget ??
+                params.toolContext?.currentChannelId ??
+                "",
             },
           },
         }

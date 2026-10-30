@@ -50,7 +50,9 @@ export function publishCommittedUserTurnInput(
   message?: PersistedUserTurnMessage,
 ) {
   const scope = completionInputScope.getStore();
-  if (!scope) return;
+  if (!scope) {
+    return;
+  }
   if (recorder && getUserTurnTranscriptAdmissionOwner(recorder)) {
     scope.recorder = recorder;
     scope.committedRecorders.add(recorder);
@@ -73,7 +75,9 @@ export async function withCurrentUserTurnInput<T>(
       ? { owner, recorder, committedRecorders: new Set(recorder ? [recorder] : []) }
       : previous;
   const native = recorder && getUserTurnTranscriptAdmissionOwner(recorder);
-  if (native) native.committedInputs = scope.committedRecorders;
+  if (native) {
+    native.committedInputs = scope.committedRecorders;
+  }
   const enter = () => runWithAsyncStore(completionInputScope, scope, run);
   return await (recorder?.withPendingInputCurrent
     ? recorder.withPendingInputCurrent(enter)

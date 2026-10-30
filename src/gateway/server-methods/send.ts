@@ -30,6 +30,7 @@ import {
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import {
   prepareTerminalSourceInputReply,
+  cancelTerminalSourceInputReply,
   settleTerminalSourceInputReply,
 } from "../../infra/outbound/source-reply-mirror.js";
 import { maybeResolvePluginMessagingTarget } from "../../infra/outbound/target-normalization.js";
@@ -387,6 +388,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                       ErrorCodes.INVALID_REQUEST,
                       `Message action ${request.action} not supported for channel ${channel}.`,
                     );
+                    await cancelTerminalSourceInputReply(sourceFinal);
                     return createGatewayInflightResult({
                       context,
                       dedupeKey,
@@ -396,7 +398,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                   }
                 }
               } catch (error) {
-                await settleTerminalSourceInputReply(sourceFinal, sourceReplyMirror);
+                await settleTerminalSourceInputReply(sourceFinal, sourceReplyMirror, error);
                 throw error;
               }
               await settleTerminalSourceInputReply(sourceFinal, {

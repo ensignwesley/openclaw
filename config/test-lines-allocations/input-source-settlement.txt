@@ -1,0 +1,4 @@
+# Exact-input source settlement regression coverage; existing completion-row/private custody only.
+# Includes actual native post-commit fault boundary, SQL/memory canonical repair,
+# fresh-recorder/collected/unstaged identities and wrong-route unknown custody.
+955

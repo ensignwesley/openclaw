@@ -331,11 +331,13 @@ async function executePreparedReplyAgentRunWithCompletion(
         disposition === "answered" ||
         disposition === "notified" ||
         disposition === "saved-unanswered"
-      )
+      ) {
         replyOperation.complete();
-      else if (disposition !== "cancelled") {
+      } else if (disposition !== "cancelled") {
         const state = resolveReplyOperationRunState(opts);
-        if (state) state.replyCompletion = { expectation: "required", outcome: "pending" };
+        if (state) {
+          state.replyCompletion = { expectation: "required", outcome: "pending" };
+        }
       }
     }
     // Only captured facts cross cancellation; no successor adoption, hooks, or reply work.

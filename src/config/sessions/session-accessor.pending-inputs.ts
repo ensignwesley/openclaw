@@ -57,6 +57,10 @@ import { SessionPendingInputCustodyError } from "./session-pending-input-custody
 import type { PendingInputCustodyGrant } from "./session-pending-input-operations.types.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import type { SessionPendingInputReceipt } from "./session-pending-input-receipt.types.js";
+import {
+  createSessionPendingInputSourceSettlement,
+  projectSessionPendingInputSettlements,
+} from "./session-pending-input-source-settlement.js";
 import { readPendingInputSource } from "./session-pending-input-source.js";
 import { preparePendingInputStore, type PendingInputScope } from "./session-pending-input-store.js";
 import {
@@ -98,17 +102,7 @@ export function readWithdrawnSessionPendingInputId(
 
 /** Native source facts come only from private registered custody, never copied SDK projections. */
 export function readSessionPendingInputSettlements(receipt: SessionPendingInputReceipt) {
-  const owner = receiptOwners.get(receipt);
-  return (owner?.sources ?? (owner ? [owner] : [])).map((source) => {
-    assertSessionPendingInputLifetimeCurrent(source);
-    return {
-      sessionKey: source.sessionKey,
-      sessionId: source.sessionId,
-      consumed: source.consumed === true,
-      message: parseSessionPendingInputMessage(source.messageJson),
-      ...source.settlement,
-    };
-  });
+  return projectSessionPendingInputSettlements(receiptOwners.get(receipt));
 }
 
 function ownerReceipt(
@@ -422,31 +416,13 @@ async function stagePreparedPendingInput(
         assertRegisteredSessionPendingInputOwner(owner);
       }
     };
-    const sourceSettlement = {
-      get identity() {
-        return settlementIdentity();
-      },
-      async read() {
-        assertCompletion();
-        const snapshot = await store.read({ ...identity, kind: "settlement" });
-        assertCompletion();
-        if (snapshot.kind !== "settlement" || !snapshot.current)
-          throw new SessionPendingInputCustodyError("Input source is no longer current");
-        const row = snapshot.row;
-        if (row && (row.run_id !== options.runId || row.request_hash !== requestHash))
-          throw new SessionPendingInputCustodyError("Input source identity changed");
-        return row?.sourceDelivery;
-      },
-      async write(delivery: import("./session-input-settlement.js").SessionInputSourceDelivery) {
-        if (finished)
-          throw new SessionPendingInputCustodyError("Input source owner has been released");
-        assertCompletion();
-        await store.mutate(
-          { ...settlementIdentity(), kind: "source-delivery", delivery },
-          (_, facts) => assertPrepared(facts, assertCompletion),
-        );
-      },
-    };
+    const sourceSettlement = createSessionPendingInputSourceSettlement({
+      store,
+      identity: settlementIdentity,
+      assertCurrent: assertCompletion,
+      released: () => finished,
+      guard: (_, facts) => assertPrepared(facts, assertCompletion),
+    });
     const completionInput = (outcome: AgentRunTerminalOutcome) => ({
       ...settlementIdentity(),
       kind: "complete" as const,
@@ -537,34 +513,10 @@ async function stagePreparedPendingInput(
       ...(complete ? { complete, completeAsync } : {}),
       settled: store.settled,
     };
-    if (previous?.outcome && isFinalInputCompletion(previous.outcome)) {
-      owner = {
-        settlement: sourceSettlement,
-        sessionActor: scope.sessionActor,
-        agentId: scope.agentId,
-        databaseAgentId: store.databaseAgentId,
-        inputId: randomUUID(),
-        transcriptInputId: identity.idempotencyKey,
-        sessionId: scope.sessionId,
-        sessionKey: store.sessionKey,
-        databasePath: store.path,
-        workerDatabasePath: store.workerDatabasePath,
-        idempotencyKey: identity.idempotencyKey,
-        lifecycleGeneration,
-        messageJson: JSON.stringify(message),
-        assertCurrent,
-        authority: options.authority,
-        consumed: true,
-        finish,
-      };
-      registerSessionPendingInputOwner(owner);
-      retained = true;
-      return Object.assign(ownerReceipt(owner), completionMethods, {
-        completion: previous.outcome,
-      });
-    }
-    if (committed) {
-      if (options.trackCompletion) {
+    const previousFinal =
+      previous?.outcome && isFinalInputCompletion(previous.outcome) ? previous.outcome : undefined;
+    if (committed || previousFinal) {
+      if (committed && options.trackCompletion) {
         const committedHash = resolveCommittedPendingInputRequestHash(
           {
             ...options,
@@ -590,14 +542,14 @@ async function stagePreparedPendingInput(
         agentId: scope.agentId,
         databaseAgentId: store.databaseAgentId,
         inputId: randomUUID(),
-        transcriptInputId: committed.messageId,
+        transcriptInputId: committed?.messageId ?? identity.idempotencyKey,
         sessionId: scope.sessionId,
         sessionKey: store.sessionKey,
         databasePath: store.path,
         workerDatabasePath: store.workerDatabasePath,
         idempotencyKey: identity.idempotencyKey,
         lifecycleGeneration,
-        messageJson: JSON.stringify(committed.message),
+        messageJson: JSON.stringify(committed?.message ?? message),
         config: options.config,
         assertCurrent: () => {
           store.assertCurrent();
@@ -610,7 +562,11 @@ async function stagePreparedPendingInput(
       registerSessionPendingInputOwner(owner);
       retained = true;
       // Replays have committed bytes but still need execution and completion custody.
-      return Object.assign(ownerReceipt(owner, true), completionMethods);
+      return Object.assign(
+        ownerReceipt(owner, previousFinal ? undefined : true),
+        completionMethods,
+        previousFinal ? { completion: previousFinal } : {},
+      );
     }
     phase.mark("persist.stage.sourceAuthority");
     return await runWithSessionSourceScope(

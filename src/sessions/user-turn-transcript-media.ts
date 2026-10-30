@@ -4,6 +4,7 @@ import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { persistUserTurnTranscript } from "./user-turn-transcript.persistence.js";
 import type {
+  CreateUserTurnTranscriptRecorderParams,
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
 } from "./user-turn-transcript.types.js";
@@ -61,4 +62,25 @@ export async function persistUserTurnInput(
   } catch (error) {
     return retainUncertainInputMedia(recorder, error);
   }
+}
+
+export function reportUserTurnPersistenceError(
+  params: Pick<CreateUserTurnTranscriptRecorderParams, "onPersistenceError" | "errorContext">,
+  error: unknown,
+) {
+  if (params.onPersistenceError) {
+    try {
+      params.onPersistenceError(error);
+    } catch {
+      // Diagnostics cannot change an already committed transcript outcome.
+    }
+    return;
+  }
+  void import("../globals.js")
+    .then(({ logVerbose }) => {
+      logVerbose(
+        `failed to persist ${params.errorContext ?? "user turn transcript"}: ${String(error)}`,
+      );
+    })
+    .catch(() => undefined);
 }

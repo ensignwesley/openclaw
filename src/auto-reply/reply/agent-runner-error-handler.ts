@@ -169,7 +169,14 @@ export async function handleAgentExecutionError(params: {
     }
     // Keep the failed attempt diagnostic, but never present it as the original input's fate.
     takePendingLifecycleTerminal().emit("error", err, { suppressErrorNotice: true });
-    await params.modelPatch.fail(err);
+    try {
+      await params.modelPatch.fail(err);
+    } catch (recordingError) {
+      // A secondary diagnostic write cannot turn a settled source answer into input loss.
+      defaultRuntime.error(
+        `Continuity diagnostic settlement failed: ${formatErrorMessage(recordingError)}`,
+      );
+    }
     return {
       kind: "final",
       continuityDisposition: disposition.disposition,
