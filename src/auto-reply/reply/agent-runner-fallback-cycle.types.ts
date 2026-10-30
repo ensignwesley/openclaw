@@ -65,6 +65,9 @@ export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions &
   };
 
 export type AgentFallbackCycleState = {
+  inputRecorder?:
+    | import("../../sessions/user-turn-transcript.types.js").UserTurnTranscriptRecorder
+    | null;
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   sessionWriter?: Extract<AgentTurnInternalResult, { kind: "settled" }>["sessionWriter"];
   compactionRequestBudget?: CompactionRequestBudget;

@@ -1,5 +1,6 @@
 name: B current owner cutover diagnostic
 on:
+  workflow_dispatch:
   push:
     branches: [proof/b-current-owner-cutover-20261030]
 permissions:

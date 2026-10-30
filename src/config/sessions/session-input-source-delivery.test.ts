@@ -13,6 +13,7 @@ import {
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { createSessionActorMemoryPending } from "./session-actor-memory-pending.js";
 import { createSessionActorMemoryState } from "./session-actor-memory-state.js";
+import { applySessionActorPhaseWithBackend } from "./session-actor-phase.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { writeSessionInputSourceDelivery } from "./session-input-source-delivery.kernel.js";
 
@@ -116,3 +117,88 @@ it.each(["sqlite", "memory"])(
       ).toThrow("different terminal delivery");
     }),
 );
+
+it("publishes a receipt only after every identified pending-final member settles", () => {
+  const source = identity("A");
+  const state = createSessionActorMemoryState({
+    sessionKey: "agent:main:A",
+    database: { kind: "memory", handle: "proof", incarnation: "one" },
+  });
+  state.hot.entry = {
+    sessionId: "s",
+    updatedAt: 1,
+    pendingFinalDelivery: {
+      kind: "transport-only",
+      createdAt: 1,
+      intentId: "intent",
+      sourceRunId: "R",
+      sourceInputs: [source],
+      context: { channel: "test", to: "source" },
+      deliveries: [
+        { id: "one", state: "prepared" },
+        { id: "two", state: "prepared" },
+      ],
+    },
+  };
+  const memory = createSessionActorMemoryPending(state, {
+    agentId: "main",
+    path: "memory",
+    admit() {},
+  });
+  const settle = (deliveryId: string, status: "delivered" | "unknown", channel = "test") =>
+    applySessionActorPhaseWithBackend(
+      {
+        type: "session.actor.deliverySettled",
+        input: {
+          commandId: deliveryId,
+          phaseId: deliveryId,
+          settlement: {
+            sessionId: "s",
+            intentId: "intent",
+            deliveryId,
+            state: status,
+            cleanup: { sessionKey: "agent:main:A", now: 10 },
+          },
+          evidence: {
+            result: {
+              channel,
+              platformMessageId: `platform-${deliveryId}`,
+              target: { id: "source" },
+            },
+          },
+        },
+      },
+      state.hot,
+      {
+        agentId: "main",
+        writeEntry(entry) {
+          state.hot.entry = entry;
+        },
+        mutatePendingInput: memory.mutate,
+        turn() {
+          throw Error("unexpected turn");
+        },
+        append() {
+          throw Error("unexpected append");
+        },
+        appendEvent() {
+          throw Error("unexpected event");
+        },
+        validateSources() {
+          return { conversationMatches: [] };
+        },
+        admit() {},
+      },
+    );
+  settle("one", "delivered");
+  expect(state.completions.size).toBe(0);
+  settle("two", "unknown");
+  expect(state.completions.size).toBe(0);
+  expect(state.hot.entry.pendingFinalDelivery?.deliveries?.[1]?.state).toBe("unknown");
+  settle("two", "delivered", "wrong-route");
+  expect(state.completions.size).toBe(0);
+  expect(state.hot.entry.pendingFinalDelivery?.deliveries?.[1]?.state).toBe("unknown");
+  settle("two", "delivered");
+  expect(state.completions.get("A")?.sourceDelivery?.resultCount).toBe(2);
+  expect(state.hot.entry.pendingFinalDelivery).toBeUndefined();
+});

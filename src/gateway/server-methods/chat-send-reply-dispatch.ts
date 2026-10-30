@@ -29,6 +29,7 @@ import { getOwnedSessionTranscriptReader } from "../../config/sessions/transcrip
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import { readUserTurnSourceInputs } from "../../sessions/user-turn-source-delivery.js";
+import { readCommittedUserTurnInputRecorders } from "../../sessions/user-turn-transcript-runtime-context.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   extractAssistantPhaseText,
@@ -212,12 +213,28 @@ export function createChatSendReplyDispatch(params: {
       const assertRoutingCurrent = captureSessionMutationRouting(getRuntimeConfig(), undefined, [
         scope,
       ]);
-      const sourceInputs = await readUserTurnSourceInputs(
-        userTurnRecorder as UserTurnTranscriptRecorder,
-        () => {
-          if (!isInspectionCurrent()) throw new Error("Native reply source lost current admission");
-        },
-      );
+      const sourceInputs = (
+        await Promise.all(
+          [
+            ...new Set([
+              userTurnRecorder as UserTurnTranscriptRecorder,
+              ...readCommittedUserTurnInputRecorders(
+                userTurnRecorder as UserTurnTranscriptRecorder,
+              ),
+            ]),
+          ].map((recorder) =>
+            readUserTurnSourceInputs(recorder, () => {
+              if (!isInspectionCurrent())
+                throw new Error("Native reply source lost current admission");
+            }),
+          ),
+        )
+      )
+        .flat()
+        .filter(
+          (source) =>
+            source.sessionKey === admission.sessionKey && source.sessionId === admission.sessionId,
+        );
       const committedSources: Array<{ source: (typeof sourceInputs)[number]; messageId: string }> =
         [];
       let decision: ReplyDeliveryState = "pending";

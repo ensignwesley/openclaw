@@ -8,6 +8,8 @@ import {
 } from "../sessions/input-provenance.js";
 import {
   attachRuntimeUserTurnTranscriptRecorder,
+  publishCommittedUserTurnInput,
+  readCurrentUserTurnInputRecorder,
   takeRuntimeUserTurnTranscriptContext,
   takeRuntimeUserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript-runtime-context.js";
@@ -314,12 +316,13 @@ function createTranscriptRunContext(
       recorder?.markRuntimePersisted(persistence.persistedMessage, persistence.anchor, {
         appended: persistence.appended,
       });
+      publishCommittedUserTurnInput(recorder, persistence.persistedMessage);
       advanceMessageActionPrompt({
         runId,
         agentId,
         sessionKey,
         sessionId: sessionManager.getSessionId(),
-        recorder,
+        recorder: recorder ?? readCurrentUserTurnInputRecorder() ?? undefined,
       });
       await onUserMessagePersisted?.(persistence.persistedMessage, runtimeMessage);
     },

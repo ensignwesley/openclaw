@@ -443,7 +443,7 @@ export async function executeFollowupTurn(params: {
             )
           : undefined;
       progressOpts.cronCreatorAuthorityCapability = capability;
-      const runWithInput = () => withCurrentUserTurnInput(recorder, execute);
+      const runWithInput = () => withCurrentUserTurnInput(recorder, execute, turn.operation);
       execution = capability
         ? await runWithCronCreatorAuthorityCapability(
             capability,

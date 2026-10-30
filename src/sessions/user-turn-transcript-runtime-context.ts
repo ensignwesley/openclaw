@@ -1,6 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 // Transient user-turn transcript context carried through runtime queues.
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import { createMessageInjectionAuthority } from "../auto-reply/reply/message-injection-authority.js";
+import { runWithAsyncStore } from "../shared/async-store.js";
+import { getUserTurnTranscriptAdmissionOwner } from "./user-turn-transcript-admission.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
@@ -23,15 +26,60 @@ type RuntimeUserTurnMessage = AgentMessage & {
   [RUNTIME_USER_TURN_TRANSCRIPT_RECORDER]?: UserTurnTranscriptRecorder;
 };
 
+// Existing invocation custody follows actual committed steering, not generated prompt text.
+const completionInputScope = new AsyncLocalStorage<{
+  owner?: object;
+  recorder?: UserTurnTranscriptRecorder;
+  committedRecorders: Set<UserTurnTranscriptRecorder>;
+}>();
+export function readCurrentUserTurnInputRecorder() {
+  const scope = completionInputScope.getStore();
+  return scope ? (scope.recorder ?? null) : undefined;
+}
+export function readCommittedUserTurnInputRecorders(
+  recorder?: UserTurnTranscriptRecorder,
+): readonly UserTurnTranscriptRecorder[] {
+  return [
+    ...(completionInputScope.getStore()?.committedRecorders ??
+      (recorder ? getUserTurnTranscriptAdmissionOwner(recorder)?.committedInputs : undefined) ??
+      []),
+  ];
+}
+export function publishCommittedUserTurnInput(
+  recorder: UserTurnTranscriptRecorder | undefined,
+  message?: PersistedUserTurnMessage,
+) {
+  const scope = completionInputScope.getStore();
+  if (!scope) return;
+  if (recorder && getUserTurnTranscriptAdmissionOwner(recorder)) {
+    scope.recorder = recorder;
+    scope.committedRecorders.add(recorder);
+  } else if (
+    !scope.recorder ||
+    getUserTurnTranscriptAdmissionOwner(scope.recorder)?.message()?.idempotencyKey !==
+      message?.idempotencyKey
+  ) {
+    scope.recorder = undefined;
+  }
+}
 export async function withCurrentUserTurnInput<T>(
   recorder: UserTurnTranscriptRecorder | undefined,
   run: () => T,
+  owner?: object,
 ): Promise<Awaited<T>> {
+  const previous = completionInputScope.getStore();
+  const scope =
+    !previous || (owner && previous.owner !== owner)
+      ? { owner, recorder, committedRecorders: new Set(recorder ? [recorder] : []) }
+      : previous;
+  const native = recorder && getUserTurnTranscriptAdmissionOwner(recorder);
+  if (native) native.committedInputs = scope.committedRecorders;
+  const enter = () => runWithAsyncStore(completionInputScope, scope, run);
   return await (recorder?.withPendingInputCurrent
-    ? recorder.withPendingInputCurrent(run)
+    ? recorder.withPendingInputCurrent(enter)
     : recorder?.withPendingInput
-      ? recorder.withPendingInput(run)
-      : run());
+      ? recorder.withPendingInput(enter)
+      : enter());
 }
 
 export function bindUserTurnInput(

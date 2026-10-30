@@ -28,6 +28,10 @@ import {
   resolveOutboundSessionRoute,
 } from "../../infra/outbound/outbound-session.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import {
+  prepareTerminalSourceInputReply,
+  settleTerminalSourceInputReply,
+} from "../../infra/outbound/source-reply-mirror.js";
 import { maybeResolvePluginMessagingTarget } from "../../infra/outbound/target-normalization.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
@@ -270,6 +274,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                 });
               }
               const sourceReplyMirror = {
+                currentInput: trustedContext.messageActionAuthorization?.currentInput,
                 action: request.action,
                 channel,
                 actionParams: request.params,
@@ -330,49 +335,74 @@ export const sendHandlers: GatewayRequestHandlers = {
                   (request.action === "send" ||
                     Boolean(trustedContext.messageActionAuthorization?.scheduled)),
               };
-              let payload: unknown;
-              if (canonicalAction || messageAuthority.assertScheduledWriteCurrent) {
-                const { runMessageAction } =
-                  await import("../../infra/outbound/message-action-runner.js");
-                const result = await runMessageAction({
-                  ...actionContext,
-                  gatewayOwnedDelivery: true,
-                  // The delegating client records the confirmed send in its destination.
-                  callerRecordsDestinationHistory: true,
-                  ...(request.action === "send"
-                    ? {
-                        actionOrigin: trustedContext.runtimeAgentId
-                          ? ("message-tool" as const)
-                          : undefined,
-                      }
-                    : {}),
-                  params: {
-                    ...request.params,
-                    channel,
-                    ...(accountId ? { accountId } : {}),
-                    idempotencyKey: request.idempotencyKey,
+              const sourceFinal = await prepareTerminalSourceInputReply(sourceReplyMirror);
+              if (sourceFinal === "answered" || sourceFinal === "pending") {
+                return createGatewayInflightSuccess({
+                  context,
+                  dedupeKey,
+                  channel,
+                  payload: {
+                    ok: true,
+                    skipped: true,
+                    reason:
+                      sourceFinal === "answered"
+                        ? "original_input_already_answered"
+                        : "original_input_delivery_pending",
                   },
                 });
-                payload = result.payload;
-              } else {
-                await messageAuthority.beforeDeliveryAttempt();
-                assertDirectAdapterHandoff?.();
-                const handled = await dispatchChannelMessageAction(actionContext);
-                if (handled) {
-                  payload = extractToolPayload(handled);
-                } else {
-                  const error = errorShape(
-                    ErrorCodes.INVALID_REQUEST,
-                    `Message action ${request.action} not supported for channel ${channel}.`,
-                  );
-                  return createGatewayInflightResult({
-                    context,
-                    dedupeKey,
-                    channel,
-                    result: { ok: false, error },
-                  });
-                }
               }
+              let payload: unknown;
+              try {
+                if (canonicalAction || messageAuthority.assertScheduledWriteCurrent) {
+                  const { runMessageAction } =
+                    await import("../../infra/outbound/message-action-runner.js");
+                  const result = await runMessageAction({
+                    ...actionContext,
+                    gatewayOwnedDelivery: true,
+                    // The delegating client records the confirmed send in its destination.
+                    callerRecordsDestinationHistory: true,
+                    ...(request.action === "send"
+                      ? {
+                          actionOrigin: trustedContext.runtimeAgentId
+                            ? ("message-tool" as const)
+                            : undefined,
+                        }
+                      : {}),
+                    params: {
+                      ...request.params,
+                      channel,
+                      ...(accountId ? { accountId } : {}),
+                      idempotencyKey: request.idempotencyKey,
+                    },
+                  });
+                  payload = result.payload;
+                } else {
+                  await messageAuthority.beforeDeliveryAttempt();
+                  assertDirectAdapterHandoff?.();
+                  const handled = await dispatchChannelMessageAction(actionContext);
+                  if (handled) {
+                    payload = extractToolPayload(handled);
+                  } else {
+                    const error = errorShape(
+                      ErrorCodes.INVALID_REQUEST,
+                      `Message action ${request.action} not supported for channel ${channel}.`,
+                    );
+                    return createGatewayInflightResult({
+                      context,
+                      dedupeKey,
+                      channel,
+                      result: { ok: false, error },
+                    });
+                  }
+                }
+              } catch (error) {
+                await settleTerminalSourceInputReply(sourceFinal, sourceReplyMirror);
+                throw error;
+              }
+              await settleTerminalSourceInputReply(sourceFinal, {
+                ...sourceReplyMirror,
+                deliveredPayload: payload,
+              });
               await scheduleDeliveredSourceReplyTranscriptMirror({
                 context,
                 mirror: { ...sourceReplyMirror, deliveredPayload: payload },

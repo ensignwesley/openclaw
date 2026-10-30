@@ -21,6 +21,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { lifecycleAdmissionByOperation } from "../../sessions/session-controller.state.js";
 import { readUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
+import { readCurrentUserTurnInputRecorder } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { formatThinkingLevelClampNotice } from "../thinking.shared.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -427,6 +428,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           );
           return result;
         } finally {
+          params.state.inputRecorder = readCurrentUserTurnInputRecorder();
           runStart.close();
           if (!params.scheduledMessageActionTurnCapability) {
             revokeMessageActionTurnCapability(messageActionTurnCapability);

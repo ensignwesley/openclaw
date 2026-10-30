@@ -159,7 +159,11 @@ export async function handleAgentExecutionError(params: {
       disposition: "unknown",
     };
     try {
-      disposition = await prepareContinuityFailureNotice(turn, params.runId);
+      disposition = await prepareContinuityFailureNotice(
+        turn,
+        params.runId,
+        params.state.inputRecorder,
+      );
     } catch (error) {
       defaultRuntime.error(`Input source settlement deferred: ${formatErrorMessage(error)}`);
     }

@@ -42,6 +42,9 @@ export type AgentTurnCompaction = {
 };
 
 type AbortedAgentTurn = {
+  inputRecorder?:
+    | import("../../sessions/user-turn-transcript.types.js").UserTurnTranscriptRecorder
+    | null;
   kind: "aborted";
   reason: "user" | "restart" | "superseded";
   sessionWriter?: CompactionAccountingTarget;
@@ -54,6 +57,9 @@ export type AgentTurnInternalResult =
   | SettledAgentTurn
   | {
       kind: "final";
+      inputRecorder?:
+        | import("../../sessions/user-turn-transcript.types.js").UserTurnTranscriptRecorder
+        | null;
       continuityDisposition?: import("./agent-runner-continuity-notice.js").ContinuityFailureDisposition;
       sessionWriter?: CompactionAccountingTarget;
       payload: ReplyPayload;
@@ -63,6 +69,9 @@ export type AgentTurnInternalResult =
 
 export type SettledAgentTurn = {
   kind: "settled";
+  inputRecorder?:
+    | import("../../sessions/user-turn-transcript.types.js").UserTurnTranscriptRecorder
+    | null;
   /** Captured before terminal event settlement consumes the invocation. */
   automation?: { result?: AutomationResult; includeReasoning: boolean };
   /** The runtime's claimed writer, independent of whether it compacted. */
@@ -99,6 +108,9 @@ export type AgentTurnExecutionResult = {
     | AbortedAgentTurn
     | {
         kind: "rejected";
+        inputRecorder?:
+          | import("../../sessions/user-turn-transcript.types.js").UserTurnTranscriptRecorder
+          | null;
         continuityDisposition?: import("./agent-runner-continuity-notice.js").ContinuityFailureDisposition;
         sessionWriter?: CompactionAccountingTarget;
         compaction?: AgentTurnCompaction;

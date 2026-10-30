@@ -75,23 +75,7 @@ function projectPendingFinalDeliveryState(
     current === "delivered" ||
     current === "suppressed" ||
     (current === "unknown" && input.state === "unknown");
-  const settled = terminal ? current : input.state;
-  const existingNotice = entry.pendingDeliveryNotice;
-  const owedNotice =
-    settled === "unknown" &&
-    pending.context &&
-    pending.intentId &&
-    existingNotice?.intentId !== pending.intentId &&
-    (!existingNotice || existingNotice.createdAt <= pending.createdAt)
-      ? {
-          pendingDeliveryNotice: {
-            createdAt: pending.createdAt,
-            context: pending.context,
-            intentId: pending.intentId,
-            state: "owed" as const,
-          },
-        }
-      : undefined;
+  let settled = terminal ? current : input.state;
   const result = evidence?.result;
   const platformMessageId = result?.platformMessageId?.trim();
   const context = pending.context;
@@ -108,6 +92,25 @@ function projectPendingFinalDeliveryState(
         normalizeDeliveryContext(result.verifiedContext),
         normalizeDeliveryContext(context),
       ));
+  // An unverified "delivered" callback cannot discharge exact-input custody.
+  if (!terminal && settled === "delivered" && pending.sourceInputs?.length && !validResult)
+    settled = "unknown";
+  const existingNotice = entry.pendingDeliveryNotice;
+  const owedNotice =
+    settled === "unknown" &&
+    pending.context &&
+    pending.intentId &&
+    existingNotice?.intentId !== pending.intentId &&
+    (!existingNotice || existingNotice.createdAt <= pending.createdAt)
+      ? {
+          pendingDeliveryNotice: {
+            createdAt: pending.createdAt,
+            context: pending.context,
+            intentId: pending.intentId,
+            state: "owed" as const,
+          },
+        }
+      : undefined;
   const receipt = terminal
     ? deliveries[index]!.receipt
     : settled === "delivered" && validResult

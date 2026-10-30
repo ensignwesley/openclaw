@@ -19,13 +19,18 @@ import type { InternalChannelThreadingToolContext } from "../../channels/threadi
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
+import { settlePendingFinalDelivery } from "./delivery-completion.js";
 import { resolveImplicitMessageActionTarget } from "./message-action-normalization.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
+import { prepareSourceInputFinalDelivery } from "./source-input-final-delivery.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 
 type SourceReplyTranscriptMirrorParams = {
+  currentInput?: MessageActionAuthorization["currentInput"];
   action: string;
   channel: string;
   actionParams: Record<string, unknown>;
@@ -418,6 +423,71 @@ function isDeliveredCurrentSourceReplyAction(params: SourceReplyTranscriptMirror
   );
   const currentMessageId = normalizeMessageIdValue(toolContext.currentMessageId);
   return Boolean(repliedToMessageId && currentMessageId && repliedToMessageId === currentMessageId);
+}
+
+/** Only an exact, current, explicitly terminal source send may acquire final custody. */
+export async function prepareTerminalSourceInputReply(params: SourceReplyTranscriptMirrorParams) {
+  const runId = normalizeOptionalString(params.toolContext?.currentSourceTurnId);
+  if (
+    !params.currentInput ||
+    params.sourceReplyFinal !== true ||
+    !params.sessionId ||
+    !params.sessionKey ||
+    !params.toolCallId ||
+    !runId ||
+    !isCurrentSourceConversation(params, true)
+  )
+    return undefined;
+  return prepareSourceInputFinalDelivery({
+    source: params.currentInput,
+    cfg: params.cfg,
+    agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    runId,
+    toolCallId: params.toolCallId,
+    context: {
+      channel: params.channel,
+      to: resolveSourceReplyTarget(params.actionParams),
+      accountId: params.accountId ?? undefined,
+      threadId: params.toolContext?.currentThreadTs,
+    },
+  });
+}
+
+export async function settleTerminalSourceInputReply(
+  completion: Awaited<ReturnType<typeof prepareTerminalSourceInputReply>>,
+  params: SourceReplyTranscriptMirrorParams,
+) {
+  if (!completion || typeof completion === "string") return;
+  const fact = projectPluginMessageDeliveryFact(params.deliveredPayload);
+  const identified =
+    fact?.status === "settled" &&
+    !fact.partialDelivery &&
+    matchesDeliveredSourceTargets(params, fact) &&
+    isCurrentSourceConversation(params, true)
+      ? fact.primaryPlatformMessageId
+      : undefined;
+  const state = identified
+    ? "delivered"
+    : fact && fact.status !== "settled"
+      ? "suppressed"
+      : "unknown";
+  await settlePendingFinalDelivery(completion, state, undefined, {
+    ...(identified
+      ? {
+          identifiedResult: {
+            channel: params.channel,
+            messageId: identified,
+            target: {
+              kind: "chat" as const,
+              id: resolveSourceReplyTarget(params.actionParams) ?? "",
+            },
+          },
+        }
+      : {}),
+    ...(state !== "unknown" ? { clearAfterSettled: true } : {}),
+  });
 }
 
 /** Mirrors successful outbound source replies into the owning session transcript. */

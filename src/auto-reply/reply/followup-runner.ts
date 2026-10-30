@@ -328,7 +328,10 @@ export function createFollowupRunner(
             sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
             entry: turn.session.current(),
             writer: execution.execution.outcome.sessionWriter,
-            recorder: turn.queued.userTurnTranscriptRecorder,
+            recorder:
+              execution.execution.outcome.inputRecorder !== undefined
+                ? (execution.execution.outcome.inputRecorder ?? undefined)
+                : turn.queued.userTurnTranscriptRecorder,
             operation: turn.operation,
             activitySummaryCompletion,
             publish: (entry) => turn.session.publish(entry),

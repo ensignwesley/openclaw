@@ -456,11 +456,16 @@ async function executeAgentTurnInternalLoop(
       }
     }
     if (cycle.kind === "aborted") {
-      return { ...cycle, sessionWriter: fallbackCycleState.sessionWriter };
+      return {
+        ...cycle,
+        inputRecorder: fallbackCycleState.inputRecorder,
+        sessionWriter: fallbackCycleState.sessionWriter,
+      };
     }
     if (cycle.kind === "final") {
       return {
         ...cycle,
+        inputRecorder: fallbackCycleState.inputRecorder,
         sessionWriter: fallbackCycleState.sessionWriter,
         resolved: {
           provider: fallbackCycleState.attemptedRuntimeProvider,
@@ -534,6 +539,7 @@ async function executeAgentTurnInternalLoop(
 
   return {
     kind: "settled",
+    inputRecorder: fallbackCycleState.inputRecorder,
     sessionWriter: fallbackCycleState.sessionWriter,
     maintenanceAuthProfile: fallbackCycleState.maintenanceAuthProfile,
     compactionRequestBudget: fallbackCycleState.compactionRequestBudget,
@@ -676,6 +682,7 @@ async function executeAgentTurnOutcome(
         ? {
             kind: "rejected",
             continuityDisposition: internal.continuityDisposition,
+            inputRecorder: internal.inputRecorder,
             sessionWriter: internal.sessionWriter,
             payload: internal.payload,
             resolved: internal.resolved,

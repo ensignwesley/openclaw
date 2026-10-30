@@ -300,17 +300,20 @@ async function executePreparedReplyAgentRunWithCompletion(
       },
     },
     () =>
-      withCurrentUserTurnInput(followupRun.userTurnTranscriptRecorder, () =>
-        traceAgentPhase("reply.run_agent_turn", () =>
-          runWithGoalReturn(() =>
-            executeAgentTurn({
-              ...context,
-              opts: executionOpts,
-              resolveVisibleReplyDelivery: context.resolveVisibleReplyDelivery,
-              replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
-            }),
+      withCurrentUserTurnInput(
+        followupRun.userTurnTranscriptRecorder,
+        () =>
+          traceAgentPhase("reply.run_agent_turn", () =>
+            runWithGoalReturn(() =>
+              executeAgentTurn({
+                ...context,
+                opts: executionOpts,
+                resolveVisibleReplyDelivery: context.resolveVisibleReplyDelivery,
+                replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
+              }),
+            ),
           ),
-        ),
+        replyOperation,
       ),
   );
   const operationSuperseded = isReplyOperationSuperseded(replyOperation);

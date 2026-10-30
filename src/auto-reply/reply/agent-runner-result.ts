@@ -48,7 +48,10 @@ export async function finalizeReplyAgentRun(
       entry: context.activeSessionEntry,
       writer: context.execution.sessionWriter,
       operation: context.replyOperation,
-      recorder: context.followupRun.userTurnTranscriptRecorder,
+      recorder:
+        context.execution.inputRecorder !== undefined
+          ? (context.execution.inputRecorder ?? undefined)
+          : context.followupRun.userTurnTranscriptRecorder,
       activitySummaryCompletion: context.activitySummaryCompletion,
       publish(entry) {
         context.activeSessionEntry = entry;

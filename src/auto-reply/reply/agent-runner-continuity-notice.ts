@@ -5,6 +5,7 @@ import {
 } from "../../sessions/session-controller.identity.js";
 import { readUserTurnSourceInputs } from "../../sessions/user-turn-source-delivery.js";
 import { getUserTurnTranscriptAdmissionOwner } from "../../sessions/user-turn-transcript-admission.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { escapeMarkdownText } from "../../shared/text/escape-markdown.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -25,13 +26,17 @@ export type ContinuityFailureDisposition =
 export async function prepareContinuityFailureNotice(
   turn: AgentTurnParams,
   runId: string,
+  inputRecorder?: UserTurnTranscriptRecorder | null,
 ): Promise<{
   disposition: ContinuityFailureDisposition;
   payload?: ReplyPayload;
 }> {
   const operation = turn.replyOperation;
   const { sessionKey, storePath } = turn;
-  const recorder = turn.followupRun.userTurnTranscriptRecorder;
+  const recorder =
+    inputRecorder !== undefined
+      ? (inputRecorder ?? undefined)
+      : turn.followupRun.userTurnTranscriptRecorder;
   const completed = recorder?.getProcessingCompletion?.();
   if (
     operation?.abortSignal.aborted ||

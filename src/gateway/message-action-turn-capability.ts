@@ -60,6 +60,8 @@ export type DashboardMessageReadAdmission = Readonly<{
 }>;
 
 export type MessageActionAuthorization = {
+  /** Host-only original input binding; never serialized into runtime context. */
+  currentInput?: { recorder: UserTurnTranscriptRecorder; assertCurrent(): void };
   requesterAccountId?: string;
   requesterSenderId?: string;
   toolContext?: InternalChannelThreadingToolContext;
@@ -122,6 +124,7 @@ type MessageActionTurnCapability = AgentRuntimeMessageActionContext & {
   assertDashboardReadCurrent?: () => void;
   currentPromptReaction?: CurrentPromptReaction;
   promptReactionBinding?: PromptReactionBinding;
+  inputRecorder?: UserTurnTranscriptRecorder;
 };
 
 const capabilitiesByToken = new Map<string, MessageActionTurnCapability>();
@@ -406,9 +409,24 @@ export function resolveMessageActionTurnAuthorization(
   params: MessageActionTurnCapabilityLookup,
 ): (AgentRuntimeMessageActionContext & MessageActionAuthorization) | undefined {
   const capability = resolveStoredMessageActionTurnCapability(params);
+  const inputRecorder = capability?.inputRecorder;
   return capability
     ? {
         ...copyMessageActionTurnContext(capability),
+        ...(inputRecorder
+          ? {
+              currentInput: {
+                recorder: inputRecorder,
+                assertCurrent() {
+                  if (
+                    resolveStoredMessageActionTurnCapability(params) !== capability ||
+                    capability.inputRecorder !== inputRecorder
+                  )
+                    throw new Error("Original input turn capability is no longer current");
+                },
+              },
+            }
+          : {}),
         scheduled: capability.scheduled,
         deliveryAttempt: capability.deliveryAttempt,
         assertDashboardReadCurrent: capability.assertDashboardReadCurrent,
@@ -432,7 +450,6 @@ export function advanceMessageActionPrompt(params: {
     params.recorder && getUserTurnTranscriptAdmissionOwner(params.recorder)?.receipt();
   for (const [token, capability] of capabilitiesByToken) {
     if (
-      !capability.currentPromptReaction ||
       !resolveStoredMessageActionTurnCapability({
         token,
         agentId: params.agentId,
@@ -443,6 +460,8 @@ export function advanceMessageActionPrompt(params: {
     ) {
       continue;
     }
+    capability.inputRecorder =
+      params.recorder && receipt?.sessionId === params.sessionId ? params.recorder : undefined;
     // A new non-WebChat input must not leave the previous prompt target current.
     if (capability.promptReactionBinding?.recorder === params.recorder) {
       continue;
