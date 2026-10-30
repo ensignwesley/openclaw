@@ -64,6 +64,7 @@ import {
   updateSendPayloadPartsFromReplyPayload,
   withSendNormalization,
 } from "./message-action-send-payload.js";
+import { executeLocalSourceInputAction } from "./message-action-source-input.js";
 import {
   resolveAndApplyOutboundReplyToId,
   resolveAndApplyOutboundThreadId,
@@ -631,81 +632,97 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     );
   }
 
-  const useCorePresentationDelivery = Boolean(
-    sendPayload.payload.presentation && hasCorePresentationDelivery(channelPlugin.outbound),
-  );
-  if (sendPayload.payload.presentation && !useCorePresentationDelivery) {
-    const fallbackMessage = materializeMessagePresentationFallback({
-      payload: sendPayload.payload,
-      text: sendPayload.message,
-    });
-    sendPayload = {
-      ...sendPayload,
-      message: fallbackMessage,
-      payload: { ...sendPayload.payload, text: fallbackMessage },
-    };
-    applySendPayloadPartsToActionParams(params, sendPayload);
-  }
-
-  const send = await executeSendAction({
-    ctx: {
-      ...ctx,
-      mediaAccess,
-      conversationType: outboundRoute?.chatType,
-      // Model-authored sends get the failure back and resend it themselves; every
-      // other caller only reports the error, so recovery keeps its replay right.
-      deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
-      onSendAccepted: commitOutboundSessionRoute,
-      transcriptRoute: outboundRoute ?? undefined,
-      silent: sendPayload.silent ?? undefined,
-    },
-    to,
-    message: sendPayload.message,
-    payload: sendPayload.payload,
-    mediaUrl: sendPayload.mediaUrl,
-    mediaUrls: sendPayload.mediaUrls,
-    buffer: readToolStringParam(params, "buffer", { trim: false }) ?? undefined,
-    filename: readToolStringParam(params, "filename") ?? undefined,
-    contentType: readToolStringParam(params, "contentType") ?? undefined,
-    asVoice: sendPayload.asVoice,
-    gifPlayback: sendPayload.gifPlayback,
-    forceDocument: sendPayload.forceDocument,
-    bestEffort: sendPayload.bestEffort,
-    reply,
-    threadId: resolvedThreadId ?? undefined,
-  });
-
-  // Local plugin acceptance commits through onSendAccepted. Gateway-relayed core
-  // sends may return no identified platform result locally; their successful
-  // return still commits the route unless the payload proves non-delivery.
-  if (send.handledBy === "core") {
-    const coreDeliveryStatus = send.sendResult?.deliveryStatus;
-    const deliveryFact = projectPluginMessageDeliveryFact(send.payload);
-    if (
-      coreDeliveryStatus !== "failed" &&
-      coreDeliveryStatus !== "suppressed" &&
-      (!deliveryFact || deliveryFact.status === "settled")
-    ) {
-      await commitOutboundSessionRoute();
-    }
-  }
-
-  const result: Extract<MessageActionResult, { kind: "send" }> = {
-    kind: "send",
-    channel,
-    action,
-    to,
-    accountId: accountId ?? undefined,
-    handledBy: send.handledBy,
-    payload: send.payload,
-    ...(send.deliveredText ? { deliveredText: send.deliveredText } : {}),
-    toolResult: send.toolResult,
-    sendResult: send.sendResult,
-    dryRun,
-  };
-  return await annotateSourceDelivery(
-    withSendNormalization(result, sendPayload.normalization),
+  return executeLocalSourceInputAction(
     ctx,
-    reply?.source === "explicit",
+    action,
+    (payload) => ({
+      kind: "send",
+      channel,
+      action,
+      to,
+      accountId: accountId ?? undefined,
+      handledBy: "plugin",
+      payload,
+      dryRun,
+    }),
+    async () => {
+      const useCorePresentationDelivery = Boolean(
+        sendPayload.payload.presentation && hasCorePresentationDelivery(channelPlugin.outbound),
+      );
+      if (sendPayload.payload.presentation && !useCorePresentationDelivery) {
+        const fallbackMessage = materializeMessagePresentationFallback({
+          payload: sendPayload.payload,
+          text: sendPayload.message,
+        });
+        sendPayload = {
+          ...sendPayload,
+          message: fallbackMessage,
+          payload: { ...sendPayload.payload, text: fallbackMessage },
+        };
+        applySendPayloadPartsToActionParams(params, sendPayload);
+      }
+
+      const send = await executeSendAction({
+        ctx: {
+          ...ctx,
+          mediaAccess,
+          conversationType: outboundRoute?.chatType,
+          // Model-authored sends get the failure back and resend it themselves; every
+          // other caller only reports the error, so recovery keeps its replay right.
+          deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
+          onSendAccepted: commitOutboundSessionRoute,
+          transcriptRoute: outboundRoute ?? undefined,
+          silent: sendPayload.silent ?? undefined,
+        },
+        to,
+        message: sendPayload.message,
+        payload: sendPayload.payload,
+        mediaUrl: sendPayload.mediaUrl,
+        mediaUrls: sendPayload.mediaUrls,
+        buffer: readToolStringParam(params, "buffer", { trim: false }) ?? undefined,
+        filename: readToolStringParam(params, "filename") ?? undefined,
+        contentType: readToolStringParam(params, "contentType") ?? undefined,
+        asVoice: sendPayload.asVoice,
+        gifPlayback: sendPayload.gifPlayback,
+        forceDocument: sendPayload.forceDocument,
+        bestEffort: sendPayload.bestEffort,
+        reply,
+        threadId: resolvedThreadId ?? undefined,
+      });
+
+      // Local plugin acceptance commits through onSendAccepted. Gateway-relayed core
+      // sends may return no identified platform result locally; their successful
+      // return still commits the route unless the payload proves non-delivery.
+      if (send.handledBy === "core") {
+        const coreDeliveryStatus = send.sendResult?.deliveryStatus;
+        const deliveryFact = projectPluginMessageDeliveryFact(send.payload);
+        if (
+          coreDeliveryStatus !== "failed" &&
+          coreDeliveryStatus !== "suppressed" &&
+          (!deliveryFact || deliveryFact.status === "settled")
+        ) {
+          await commitOutboundSessionRoute();
+        }
+      }
+
+      const result: Extract<MessageActionResult, { kind: "send" }> = {
+        kind: "send",
+        channel,
+        action,
+        to,
+        accountId: accountId ?? undefined,
+        handledBy: send.handledBy,
+        payload: send.payload,
+        ...(send.deliveredText ? { deliveredText: send.deliveredText } : {}),
+        toolResult: send.toolResult,
+        sendResult: send.sendResult,
+        dryRun,
+      };
+      return await annotateSourceDelivery(
+        withSendNormalization(result, sendPayload.normalization),
+        ctx,
+        reply?.source === "explicit",
+      );
+    },
   );
 }

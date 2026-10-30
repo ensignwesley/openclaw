@@ -11,10 +11,12 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { withSessionActor } from "../../config/sessions/session-actor-scope.js";
 import { listSessionReactions } from "../../config/sessions/session-reaction-store.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createCurrentPromptReaction } from "../../gateway/current-prompt-reaction.js";
 import {
+  advanceMessageActionPrompt,
   resolveMessageActionTurnAuthorization as authorization,
   resolveMessageActionTurnCapability as capability,
   revokeMessageActionTurnCapability as revoke,
@@ -24,6 +26,7 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { readUserTurnSourceInputs } from "../../sessions/user-turn-source-delivery.js";
 import {
   bindUserTurnPromptReactionSource,
   readUserTurnPromptReactionSource,
@@ -513,4 +516,84 @@ it("keeps explicit external reactions separate and never substitutes the WebChat
   );
   expect(broadcast).not.toHaveBeenCalled();
   expect(reactions()[messageId]).toBeUndefined();
+});
+
+it("records a durable exact-input answer after an explicitly terminal native prompt reaction", async () => {
+  revoke(token);
+  recorder = createUserTurnTranscriptRecorder({
+    input: { text: "Terminal reaction original", timestamp: 1, idempotencyKey: `${runId}:user` },
+    target: { ...scope, sessionEntry: undefined, config },
+  });
+  bindSource(recorder);
+  token = mintForRecorder(recorder, runId);
+  await recorder.stageApproved!({ runId, assertCurrent: run.assertSourceCurrent });
+  try {
+    const messageId = await persist();
+    advanceMessageActionPrompt({ ...scope, runId, recorder });
+    await execute({ final: true });
+    expect(reactions()[messageId]).toHaveLength(1);
+    const [original] = await readUserTurnSourceInputs(recorder, run.assertSourceCurrent);
+    expect(await original!.read!()).toMatchObject({
+      kind: "answer",
+      responderRunId: runId,
+      platformMessageId: messageId,
+    });
+  } finally {
+    recorder.finishPendingInput!("interrupted");
+    await recorder.waitForPendingInputSettlement!();
+  }
+});
+
+it("retains unknown custody when an actual native prompt reaction commits before a lost callback result", async () => {
+  revoke(token);
+  recorder = createUserTurnTranscriptRecorder({
+    input: {
+      text: "Ambiguous terminal reaction original",
+      timestamp: 1,
+      idempotencyKey: `${runId}:user`,
+    },
+    target: { ...scope, sessionEntry: undefined, config },
+  });
+  bindSource(recorder);
+  const original = required(readUserTurnPromptReactionSource(recorder));
+  bindUserTurnPromptReactionSource(recorder, {
+    ...original,
+    createReaction: (input) => {
+      const native = original.createReaction(input);
+      return async (params) => {
+        await native(params);
+        throw new Error("Synthetic lost native reaction callback result");
+      };
+    },
+  });
+  token = mintForRecorder(recorder, runId);
+  await recorder.stageApproved!({ runId, assertCurrent: run.assertSourceCurrent });
+  try {
+    const messageId = await persist();
+    advanceMessageActionPrompt({ ...scope, runId, recorder });
+    await expect(execute({ final: true })).rejects.toThrow(
+      "Synthetic lost native reaction callback result",
+    );
+    expect(reactions()[messageId]).toHaveLength(1);
+    const [input] = await readUserTurnSourceInputs(recorder, run.assertSourceCurrent);
+    expect(await input!.read!()).toBeUndefined();
+    const pending = await withSessionActor(
+      scope,
+      { assertCurrent: run.assertSourceCurrent, assertReadable: run.assertSourceCurrent },
+      async (actor) =>
+        (
+          await actor.read({
+            assertCurrent: run.assertSourceCurrent,
+            authorize: run.assertSourceCurrent,
+          })
+        ).entry?.pendingFinalDelivery,
+    );
+    expect(pending?.deliveries).toMatchObject([{ state: "unknown" }]);
+    await execute({ final: true });
+    expect(reactions()[messageId]).toHaveLength(1);
+    expect(broadcast).toHaveBeenCalledOnce();
+  } finally {
+    recorder.finishPendingInput!("interrupted");
+    await recorder.waitForPendingInputSettlement!();
+  }
 });

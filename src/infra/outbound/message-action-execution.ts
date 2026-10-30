@@ -38,6 +38,7 @@ import {
   type ResolvedActionContext,
 } from "./message-action-contracts.js";
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
+import { executeLocalSourceInputAction } from "./message-action-source-input.js";
 import { resolveAndApplyOutboundThreadId } from "./message-action-threading.js";
 import {
   GATEWAY_SEND_RECONCILIATION_TIMEOUT_MS,
@@ -361,73 +362,80 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
     return await annotateSourceDelivery(gatewayPluginAction, ctx, pollReplyToIsExplicit);
   }
 
-  const poll = await executePollAction({
-    ctx: {
-      ...ctx,
-      // Poll actions expose requester IDs, turn context, and the same live
-      // provider-call fence as every other scheduled message action.
-      mediaAccess: undefined,
-      input: {
-        cfg,
-        action,
-        params,
-        requesterAccountId: input.requesterAccountId,
-        requesterSenderId: input.requesterSenderId,
-        conversationReadOrigin: input.conversationReadOrigin,
-        sessionKey: input.sessionKey,
-        sessionId: input.sessionId,
-        inboundEventKind: input.inboundEventKind,
-        toolContext: input.toolContext,
-        messageActionAuthorization: input.messageActionAuthorization,
-        gatewayOwnedDelivery: input.gatewayOwnedDelivery,
-        onPlatformSendDispatch: input.onPlatformSendDispatch,
-        assertDirectAdapterHandoff: input.assertDirectAdapterHandoff,
-      },
-      silent: silent ?? undefined,
-    },
-    resolveCorePoll: () => {
-      const question = readToolStringParam(params, "pollQuestion", {
-        required: true,
-      });
-      const options = readStringArrayParam(params, "pollOption", { required: true });
-      if (options.length < 2) {
-        throw new Error("pollOption requires at least two values");
-      }
-      let content = readToolStringParam(params, "message", { allowEmpty: true, trim: false });
-      if (content !== undefined && !content.trim()) {
-        content = "";
-      }
-      const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
-      const durationHours = readPositiveIntegerParam(params, "pollDurationHours", {
-        message: "pollDurationHours must be a positive integer",
-      });
-
-      return {
-        to,
-        question,
-        content,
-        options,
-        maxSelections: resolvePollMaxSelections(options.length, allowMultiselect),
-        durationHours: durationHours ?? undefined,
-        threadId: resolvedThreadId ?? undefined,
-      };
-    },
-  });
-
-  return await annotateSourceDelivery(
-    {
-      kind: "poll",
-      channel,
-      action,
-      to,
-      handledBy: poll.handledBy,
-      payload: poll.payload,
-      toolResult: poll.toolResult,
-      pollResult: poll.pollResult,
-      dryRun,
-    },
+  return executeLocalSourceInputAction(
     ctx,
-    pollReplyToIsExplicit,
+    action,
+    (payload) => ({ kind: "poll", channel, action, to, handledBy: "plugin", payload, dryRun }),
+    async () => {
+      const poll = await executePollAction({
+        ctx: {
+          ...ctx,
+          // Poll actions expose requester IDs, turn context, and the same live
+          // provider-call fence as every other scheduled message action.
+          mediaAccess: undefined,
+          input: {
+            cfg,
+            action,
+            params,
+            requesterAccountId: input.requesterAccountId,
+            requesterSenderId: input.requesterSenderId,
+            conversationReadOrigin: input.conversationReadOrigin,
+            sessionKey: input.sessionKey,
+            sessionId: input.sessionId,
+            inboundEventKind: input.inboundEventKind,
+            toolContext: input.toolContext,
+            messageActionAuthorization: input.messageActionAuthorization,
+            gatewayOwnedDelivery: input.gatewayOwnedDelivery,
+            onPlatformSendDispatch: input.onPlatformSendDispatch,
+            assertDirectAdapterHandoff: input.assertDirectAdapterHandoff,
+          },
+          silent: silent ?? undefined,
+        },
+        resolveCorePoll: () => {
+          const question = readToolStringParam(params, "pollQuestion", {
+            required: true,
+          });
+          const options = readStringArrayParam(params, "pollOption", { required: true });
+          if (options.length < 2) {
+            throw new Error("pollOption requires at least two values");
+          }
+          let content = readToolStringParam(params, "message", { allowEmpty: true, trim: false });
+          if (content !== undefined && !content.trim()) {
+            content = "";
+          }
+          const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
+          const durationHours = readPositiveIntegerParam(params, "pollDurationHours", {
+            message: "pollDurationHours must be a positive integer",
+          });
+
+          return {
+            to,
+            question,
+            content,
+            options,
+            maxSelections: resolvePollMaxSelections(options.length, allowMultiselect),
+            durationHours: durationHours ?? undefined,
+            threadId: resolvedThreadId ?? undefined,
+          };
+        },
+      });
+
+      return await annotateSourceDelivery(
+        {
+          kind: "poll",
+          channel,
+          action,
+          to,
+          handledBy: poll.handledBy,
+          payload: poll.payload,
+          toolResult: poll.toolResult,
+          pollResult: poll.pollResult,
+          dryRun,
+        },
+        ctx,
+        pollReplyToIsExplicit,
+      );
+    },
   );
 }
 
@@ -508,47 +516,54 @@ export async function executeMessagePlugin(
     return await annotateSourceDelivery(gatewayPluginAction, ctx, replyToIsExplicit);
   }
 
-  const finishPluginAction = (payload: unknown, toolResult?: AgentToolResult<unknown>) =>
-    annotateSourceDelivery(
-      {
-        ...actionResult,
-        handledBy: "plugin",
-        payload,
-        ...(toolResult ? { toolResult } : {}),
-      },
-      ctx,
-      replyToIsExplicit,
-    );
-  const authorization = input.messageActionAuthorization;
-  let handled;
-  try {
-    handled = await dispatchChannelMessageAction({
-      ...createChannelActionContext({ ctx, action, mediaAccess }),
-      progressSnapshot: input.progressSnapshot,
-      requesterAccountId:
-        authorization !== undefined
-          ? authorization.requesterAccountId
-          : (input.requesterAccountId ?? undefined),
-      requesterSenderId:
-        authorization !== undefined
-          ? authorization.requesterSenderId
-          : (input.requesterSenderId ?? undefined),
-      toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
-      messageActionAuthorization: authorization,
-      deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
-      skipQueue: input.skipQueue,
-    });
-  } catch (error) {
-    const partialDelivery = input.messageActionAuthorization?.scheduled
-      ? projectMessageActionPartialDelivery(error)
-      : undefined;
-    if (partialDelivery) {
-      return await finishPluginAction(partialDelivery);
-    }
-    throw error;
-  }
-  if (!handled) {
-    throw new Error(`Message action ${action} not supported for channel ${channel}.`);
-  }
-  return await finishPluginAction(extractToolPayload(handled), handled);
+  return executeLocalSourceInputAction(
+    ctx,
+    action,
+    (payload) => ({ ...actionResult, handledBy: "plugin", payload }),
+    async () => {
+      const finishPluginAction = (payload: unknown, toolResult?: AgentToolResult<unknown>) =>
+        annotateSourceDelivery(
+          {
+            ...actionResult,
+            handledBy: "plugin",
+            payload,
+            ...(toolResult ? { toolResult } : {}),
+          },
+          ctx,
+          replyToIsExplicit,
+        );
+      const authorization = input.messageActionAuthorization;
+      let handled;
+      try {
+        handled = await dispatchChannelMessageAction({
+          ...createChannelActionContext({ ctx, action, mediaAccess }),
+          progressSnapshot: input.progressSnapshot,
+          requesterAccountId:
+            authorization !== undefined
+              ? authorization.requesterAccountId
+              : (input.requesterAccountId ?? undefined),
+          requesterSenderId:
+            authorization !== undefined
+              ? authorization.requesterSenderId
+              : (input.requesterSenderId ?? undefined),
+          toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
+          messageActionAuthorization: authorization,
+          deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
+          skipQueue: input.skipQueue,
+        });
+      } catch (error) {
+        const partialDelivery = input.messageActionAuthorization?.scheduled
+          ? projectMessageActionPartialDelivery(error)
+          : undefined;
+        if (partialDelivery) {
+          return await finishPluginAction(partialDelivery);
+        }
+        throw error;
+      }
+      if (!handled) {
+        throw new Error(`Message action ${action} not supported for channel ${channel}.`);
+      }
+      return await finishPluginAction(extractToolPayload(handled), handled);
+    },
+  );
 }

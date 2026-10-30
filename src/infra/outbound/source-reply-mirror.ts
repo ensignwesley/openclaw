@@ -425,9 +425,42 @@ function isDeliveredCurrentSourceReplyAction(params: SourceReplyTranscriptMirror
   return Boolean(repliedToMessageId && currentMessageId && repliedToMessageId === currentMessageId);
 }
 
-/** Only an exact, current, explicitly terminal source send may acquire final custody. */
+async function isTerminalSourceReplyIntent(
+  params: SourceReplyTranscriptMirrorParams,
+): Promise<boolean> {
+  if (isMessageToolSendActionName(params.action) || params.action === "poll") {
+    return isCurrentSourceConversation({ ...params, action: "send" }, true);
+  }
+  if (params.action === "reply") {
+    return isDeliveredCurrentSourceReplyAction(params);
+  }
+  if (params.action === "react") {
+    return (
+      params.actionParams.remove !== true &&
+      Boolean(normalizeOptionalString(params.actionParams.emoji)) &&
+      isDeliveredCurrentSourceReplyAction(params)
+    );
+  }
+  if (params.action !== "thread-reply" || !hasCurrentSourceContext(params)) {
+    return false;
+  }
+  const placement = resolveSourceReplyThreadPlacement(
+    params,
+    resolveChannelThreadAddressing(params.channel),
+  );
+  if (placement === "mismatch") {
+    return false;
+  }
+  if (placement === "match" && matchesCurrentSourceTarget(params, placement, "reply")) {
+    return true;
+  }
+  const ownerMatch = resolveOwnerCurrentConversationMatch(params, true);
+  return typeof ownerMatch === "function" ? await ownerMatch() : ownerMatch === true;
+}
+
+/** Only an exact, current, explicitly terminal source action may acquire final custody. */
 export async function prepareTerminalSourceInputReply(params: SourceReplyTranscriptMirrorParams) {
-  const runId = normalizeOptionalString(params.toolContext?.currentSourceTurnId);
+  const runId = normalizeOptionalString(params.currentInput?.runId);
   if (
     !params.currentInput ||
     params.sourceReplyFinal !== true ||
@@ -435,13 +468,7 @@ export async function prepareTerminalSourceInputReply(params: SourceReplyTranscr
     !params.sessionKey ||
     !params.toolCallId ||
     !runId ||
-    !(
-      isCurrentSourceConversation(params, true) ||
-      (params.action === "react" &&
-        params.actionParams.remove !== true &&
-        Boolean(normalizeOptionalString(params.actionParams.emoji)) &&
-        isDeliveredCurrentSourceReplyAction(params))
-    )
+    !(await isTerminalSourceReplyIntent(params))
   ) {
     return undefined;
   }

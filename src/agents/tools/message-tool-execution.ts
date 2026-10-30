@@ -33,6 +33,7 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import * as embeddedMessageDelivery from "../embedded-agent-message-delivery.js";
+import { isMessageToolSendActionName } from "../embedded-agent-messaging.js";
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
@@ -64,6 +65,7 @@ import {
   buildMessageToolDeliveryFingerprint,
   normalizeMessageToolIdempotencyKeyPart,
 } from "./message-tool-idempotency.js";
+import { executeMessageToolPromptReaction } from "./message-tool-prompt-reaction.js";
 import {
   projectScheduledMessageActionPartialResult,
   shouldRevalidateCompletedMessageAction,
@@ -351,47 +353,23 @@ function* createMessageToolSteps(
         throw new Error("No prompt here permits reactions; pass channel, target, and messageId.");
       }
       if (reactsToCurrentPrompt && currentPromptReaction) {
-        const allowedParams = new Set(["action", "channel", "emoji", "remove", "dryRun"]);
-        if (
-          Object.keys(params).some((key) => params[key] !== undefined && !allowedParams.has(key))
-        ) {
-          throw new Error(
-            "WebChat reactions only target the current prompt; omit target, messageId, and identity parameters.",
-          );
-        }
-        decisions.runBoundary(() =>
-          enforceMessageActionAllowlist({
-            cfg: rawConfig,
-            agentId: resolvedAgentId,
-            action,
-          }),
-        );
-        const emoji = readToolStringParam(params, "emoji", { required: true });
-        const remove = readBooleanParam(params, "remove") === true;
-        const dryRun = readBooleanParam(params, "dryRun") === true;
-        const result = await runWithAgentToolSourceExecutionScope(assertActionCurrent, () =>
-          currentPromptReaction({
-            emoji,
-            remove,
-            dryRun,
-            assertCurrent: assertActionCurrent,
-          }),
-        );
-        assertActionCurrent();
-        const sourceReplyDelivered =
-          requestedSourceReplyFinal === true && result.changed && !remove && !dryRun;
-        if (sourceReplyDelivered) {
-          sourceReplyOperation?.markSourceReplyDelivered();
-        }
-        return embeddedMessageDelivery.attachEmbeddedMessageDeliveryFact(
-          jsonResult({ ok: true, channel: "webchat", ...result, remove, dryRun }),
-          {
-            status: dryRun ? "dryRun" : "settled",
-            partialDelivery: false,
-            createdThreadIds: [],
-            ...(sourceReplyDelivered ? { sourceReplyDelivered: true } : {}),
-          },
-        );
+        return executeMessageToolPromptReaction({
+          params,
+          cfg: rawConfig,
+          agentId: resolvedAgentId,
+          sessionKey: options?.agentSessionKey,
+          sessionId: options?.sessionId,
+          toolCallId,
+          requestedFinal: requestedSourceReplyFinal,
+          source: messageActionAuthorization.currentInput,
+          sourceReplyOperation,
+          currentPromptReaction,
+          assertCurrent: assertActionCurrent,
+          authorize: () =>
+            decisions.runBoundary(() =>
+              enforceMessageActionAllowlist({ cfg: rawConfig, agentId: resolvedAgentId, action }),
+            ),
+        });
       }
 
       const gatewayContext = { ...options, messageActionTurnCapability: gatewayTurnCapability };
@@ -554,9 +532,10 @@ function* createMessageToolSteps(
         ? { ...params, idempotencyKey: actionIdempotencyKey }
         : params;
       const hasExactSourceTurn =
-        action === "send" &&
-        sourceReplySinkDeliveryMode === "message_tool_only" &&
-        normalizeOptionalString(trustedTurnContext?.toolContext?.currentSourceTurnId) !== undefined;
+        messageActionAuthorization.currentInput !== undefined &&
+        (isMessageToolSendActionName(action) ||
+          ["poll", "reply", "thread-reply"].includes(action) ||
+          (action === "react" && requestedSourceReplyFinal === true));
       return await withChannelReadAuthority(
         action === "download-file" || scheduledRead || assertDashboardReadCurrent
           ? assertActionCurrent
@@ -599,12 +578,11 @@ function* createMessageToolSteps(
                   sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
                   sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
                   sourceReplyTranscriptOnly: options?.inputProvenance?.kind === "inter_session",
-                  // Only an admitted channel source can arm terminal restart reconciliation.
-                  // Preserve explicit progress even without a source turn: recovery must not
-                  // mistake its persisted mirror for a completed assistant reply.
+                  // Exact native custody arms every supported terminal source route.
+                  // Explicit progress must never acquire the input's final owner.
                   sourceReplyFinal: hasExactSourceTurn
                     ? (requestedSourceReplyFinal ?? true)
-                    : action === "send" && requestedSourceReplyFinal === false
+                    : requestedSourceReplyFinal === false
                       ? false
                       : undefined,
                   sourceReplyToolCallId: hasExactSourceTurn ? toolCallId : undefined,

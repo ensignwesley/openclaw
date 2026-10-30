@@ -1,4 +1,3 @@
-# Exact-input source settlement regression coverage; existing completion-row/private custody only.
-# Includes actual native post-commit fault boundary, SQL/memory canonical repair,
-# fresh-recorder/collected/unstaged identities and wrong-route unknown custody.
-955
+# Exact-input source settlement: native commit fence/steering, canonical SQL/memory,
+# actual source-tool HTTP/native reaction acceptance and independent custody.
+2180

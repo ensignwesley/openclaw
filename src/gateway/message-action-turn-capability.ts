@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type { InternalChannelThreadingToolContext } from "../channels/threading-tool-context-internal.js";
@@ -61,7 +62,7 @@ export type DashboardMessageReadAdmission = Readonly<{
 
 export type MessageActionAuthorization = {
   /** Host-only original input binding; never serialized into runtime context. */
-  currentInput?: { recorder: UserTurnTranscriptRecorder; assertCurrent(): void };
+  currentInput?: { recorder: UserTurnTranscriptRecorder; runId: string; assertCurrent(): void };
   requesterAccountId?: string;
   requesterSenderId?: string;
   toolContext?: InternalChannelThreadingToolContext;
@@ -417,6 +418,7 @@ export function resolveMessageActionTurnAuthorization(
           ? {
               currentInput: {
                 recorder: inputRecorder,
+                runId: capability.runId,
                 assertCurrent() {
                   if (
                     resolveStoredMessageActionTurnCapability(params) !== capability ||
@@ -461,8 +463,28 @@ export function advanceMessageActionPrompt(params: {
     ) {
       continue;
     }
+    const previousInput = capability.inputRecorder;
     capability.inputRecorder =
       params.recorder && receipt?.sessionId === params.sessionId ? params.recorder : undefined;
+    if (previousInput && previousInput !== capability.inputRecorder) {
+      const owner =
+        capability.inputRecorder && getUserTurnTranscriptAdmissionOwner(capability.inputRecorder);
+      const origin = owner?.requesterOrigin();
+      const transport = asRecord(owner?.message()?.["__openclaw"]?.transport);
+      // Move source resource context only from the committed native original. Keep
+      // requester grants unchanged, and never assign A's ingress token to B.
+      capability.toolContext = {
+        ...capability.toolContext,
+        currentChannelProvider: normalizeOptionalString(origin?.messageProvider),
+        currentChannelId: origin?.conversationId ?? undefined,
+        currentMessagingTarget: origin?.conversationId ?? undefined,
+        currentThreadTs:
+          origin?.messageThreadId == null ? undefined : String(origin.messageThreadId),
+        currentChatType: origin?.chatType,
+        currentMessageId: normalizeOptionalString(transport?.messageId),
+        currentSourceTurnId: undefined,
+      };
+    }
     // A new non-WebChat input must not leave the previous prompt target current.
     if (capability.promptReactionBinding?.recorder === params.recorder) {
       continue;

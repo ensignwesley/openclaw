@@ -1,0 +1,419 @@
+import fs from "node:fs/promises";
+import { createServer, request as httpRequest } from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { expect, test, vi } from "vitest";
+import * as transcriptPersistence from "../src/agents/sessions/agent-session-transcript.js";
+import { AgentSession } from "../src/agents/sessions/agent-session.js";
+import { SessionTranscriptContinuityError } from "../src/agents/sessions/transcript-turn-error.js";
+import { preparePendingInputStore } from "../src/config/sessions/session-pending-input-store.js";
+import { startGatewayServer } from "../src/gateway/server.js";
+import { reserveGatewayTestListener } from "../src/gateway/test-helpers.listener.js";
+import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
+import { bindInheritedNativeProcessOwner } from "../src/process/supervisor/inherited-process-lineage.js";
+import { createOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
+import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
+import {
+  createOpenAiResponsesModelConfig,
+  startOpenAiResponsesModelServer,
+} from "./helpers/openai-responses-model-fixture.js";
+import { createDeferred, withinTest } from "./helpers/promise.js";
+import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
+
+test("retains distinct A and B receipts when native steering commits B final before continuity refusal", async (context) => {
+  const nativeOwner = process.env.CONTINUITY_PROOF_NATIVE_OWNER;
+  const releaseNativeOwner = nativeOwner
+    ? bindInheritedNativeProcessOwner(new URL(nativeOwner).href)
+    : () => {};
+  const destination =
+    (process.env.CONTINUITY_PROOF_OUTPUT
+      ? path.join(process.env.CONTINUITY_PROOF_OUTPUT, "steering")
+      : undefined) ?? (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-continuity-")));
+  await fs.mkdir(destination, { recursive: true });
+  const transport: { phase: string; request: string; response: string }[] = [];
+  const phase = "native-steering-postcommit";
+  const firstModelRequest = createDeferred<void>();
+  const releaseFirstModel = createDeferred<void>();
+  let requestCount = 0;
+  const nativeSteer = AgentSession.prototype.steer;
+  const steeringCalls: unknown[][] = [];
+  const steeringSpy = vi.spyOn(AgentSession.prototype, "steer").mockImplementation(async function (
+    this: AgentSession,
+    ...args
+  ) {
+    const result = await nativeSteer.apply(this, args);
+    steeringCalls.push(args);
+    return result;
+  });
+  const model = await startOpenAiResponsesModelServer({
+    modelId: "continuity-proof",
+    bindError: "continuity fixture not listening",
+    onRequest: async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) {
+        chunks.push(Buffer.from(chunk));
+      }
+      const requestNumber = ++requestCount;
+      if (requestNumber === 1) {
+        firstModelRequest.resolve();
+        await releaseFirstModel.promise;
+      }
+      const marker = requestNumber === 1 ? "NATIVE-A-ANSWER" : "NATIVE-B-ANSWER";
+      const responseId = `resp_continuity_${requestNumber}`;
+      const item = {
+        type: "message",
+        id: `msg_continuity_${requestNumber}`,
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: marker, annotations: [] }],
+      };
+      const events = [
+        {
+          type: "response.created",
+          response: { id: responseId, status: "in_progress", output: [] },
+        },
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { ...item, status: "in_progress", content: [] },
+        },
+        {
+          type: "response.content_part.added",
+          item_id: item.id,
+          output_index: 0,
+          content_index: 0,
+          part: { type: "output_text", text: "", annotations: [] },
+        },
+        {
+          type: "response.output_text.delta",
+          item_id: item.id,
+          output_index: 0,
+          content_index: 0,
+          delta: marker,
+        },
+        {
+          type: "response.output_text.done",
+          item_id: item.id,
+          output_index: 0,
+          content_index: 0,
+          text: marker,
+        },
+        { type: "response.output_item.done", output_index: 0, item },
+        {
+          type: "response.completed",
+          response: {
+            id: responseId,
+            status: "completed",
+            output: [item],
+            usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+          },
+        },
+      ];
+      const wire =
+        events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n";
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(wire);
+    },
+  });
+  // Capture bytes read from the fixture's actual HTTP response, not its scripted event source.
+  const captureProxy = createServer((request, response) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) {
+        chunks.push(Buffer.from(chunk));
+      }
+      const body = Buffer.concat(chunks);
+      const requestPhase = phase;
+      const upstream = httpRequest(
+        new URL(request.url ?? "/", model.baseUrl),
+        {
+          method: request.method,
+          headers: { ...request.headers, host: new URL(model.baseUrl).host },
+        },
+        (incoming) => {
+          const received: Buffer[] = [];
+          response.writeHead(incoming.statusCode ?? 502, incoming.headers);
+          incoming.on("data", (chunk) => {
+            received.push(Buffer.from(chunk));
+            response.write(chunk);
+          });
+          incoming.on("end", () => {
+            if (request.method === "POST" && request.url === "/v1/responses") {
+              transport.push({
+                phase: requestPhase,
+                request: body.toString("utf8"),
+                response: Buffer.concat(received).toString("utf8"),
+              });
+              void fs.writeFile(
+                path.join(destination, "transport.json"),
+                JSON.stringify(transport, null, 2),
+              );
+            }
+            response.end();
+          });
+          incoming.on("error", (error) => response.destroy(error));
+        },
+      );
+      upstream.on("error", (error) => response.destroy(error));
+      upstream.end(body);
+    })().catch((error) => response.destroy(error));
+  });
+  await new Promise<void>((resolve, reject) => {
+    captureProxy.once("error", reject);
+    captureProxy.listen(0, "127.0.0.1", resolve);
+  });
+  const proxyAddress = captureProxy.address();
+  if (!proxyAddress || typeof proxyAddress === "string") {
+    throw new Error("Capture proxy not listening");
+  }
+  const captureProxyUrl = `http://127.0.0.1:${proxyAddress.port}`;
+  const native = transcriptPersistence.persistAgentSessionMessage;
+  const records: Array<{
+    kind: "admitted-user" | "native-final-committed";
+    entryId: string | undefined;
+    message?: unknown;
+  }> = [];
+  const spy = vi
+    .spyOn(transcriptPersistence, "persistAgentSessionMessage")
+    .mockImplementation(async (...args) => {
+      const entryId = await native(...args);
+      const message = args[1];
+      if (message.role === "user") {
+        records.push({ kind: "admitted-user", entryId, message });
+      }
+      if (
+        message.role === "assistant" &&
+        message.stopReason !== "error" &&
+        message.stopReason !== "aborted" &&
+        message.stopReason !== "toolUse"
+      ) {
+        records.push({ kind: "native-final-committed", entryId, message });
+        await fs.writeFile(
+          path.join(destination, "native-committed.json"),
+          JSON.stringify(records, null, 2),
+        );
+        if (!JSON.stringify(message).includes("NATIVE-B-ANSWER")) {
+          return entryId;
+        }
+        throw new SessionTranscriptContinuityError(
+          "projection_read_fence",
+          "Session transcript changed during context read",
+        );
+      }
+      return entryId;
+    });
+  const listener = await reserveGatewayTestListener();
+  const token = "synthetic-native-continuity-proof";
+  const state = await createOpenClawTestState({
+    label: "b-native",
+    scenario: "gateway-loopback",
+    gateway: { port: listener.port, token },
+    applyEnv: true,
+  });
+  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  let client: Awaited<ReturnType<typeof acquireGatewayTestClient>> | undefined;
+  const events: Array<{ event?: string; payload?: unknown }> = [];
+  const terminal = createDeferred<void>();
+  let admittedRunId: string | undefined;
+  const checkTerminal = () => {
+    if (
+      events.some((event) => {
+        const payload = event.payload as { runId?: string; state?: string } | undefined;
+        return (
+          event.event === "chat" &&
+          admittedRunId &&
+          payload?.runId === admittedRunId &&
+          ["final", "error", "aborted"].includes(payload.state ?? "")
+        );
+      })
+    ) {
+      terminal.resolve();
+    }
+  };
+  try {
+    const config = createOpenAiResponsesModelConfig({
+      baseUrl: captureProxyUrl,
+      providerId: "continuity-proof",
+      modelId: "continuity-proof",
+      reasoning: false,
+      toolProfile: "minimal",
+    });
+    config.agents!.defaults!.workspace = state.workspaceDir;
+    config.agents!.entries = { main: { workspace: state.workspaceDir } };
+    config.gateway = {
+      port: listener.port,
+      bind: "loopback",
+      controlUi: { enabled: false },
+      auth: { mode: "token", token },
+    };
+    config.plugins = { allow: ["openai"], slots: { memory: "none" } };
+    await fs.mkdir(state.workspaceDir, { recursive: true });
+    await state.writeConfig(config);
+    server = await listener.start(() =>
+      startGatewayServer(listener.port, { bind: "loopback", controlUiEnabled: false }),
+    );
+    client = await acquireGatewayTestClient(
+      {
+        url: `ws://127.0.0.1:${listener.port}`,
+        token,
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+        clientName: "test",
+        clientVersion: "dev",
+        mode: "test",
+        role: "operator",
+        deviceIdentity: loadOrCreateDeviceIdentity({ env: { OPENCLAW_STATE_DIR: state.stateDir } }),
+        requestTimeoutMs: 120000,
+        onEvent: (event) => {
+          events.push(event);
+          checkTerminal();
+          void fs.writeFile(path.join(destination, "events.json"), JSON.stringify(events, null, 2));
+        },
+      },
+      {
+        timeoutMs: 30000,
+        timeoutMessage: "Synthetic connect timeout",
+        closeMessage: "Synthetic connect closed",
+      },
+    );
+    const sessionKey = "agent:main:native-steering-before-observation";
+    await client.request("sessions.create", {
+      key: sessionKey,
+      agentId: "main",
+      cwd: state.workspaceDir,
+      label: "Synthetic native continuity",
+    });
+    const accepted = await client.request<{ runId: string }>("chat.send", {
+      sessionKey,
+      message: "A: answer the first synthetic request.",
+      idempotencyKey: "synthetic-native-steering-before-observation",
+    });
+    admittedRunId = accepted.runId;
+    checkTerminal();
+    await withinTest(firstModelRequest.promise, context.signal);
+    const steering = await client.request<{ runId: string }>("chat.send", {
+      sessionKey,
+      message: "B: answer this distinct steered synthetic request.",
+      idempotencyKey: "synthetic-native-steering-B",
+      queueMode: "steer",
+    });
+    releaseFirstModel.resolve();
+    const settled = await client.request("agent.wait", {
+      runId: accepted.runId,
+      timeoutMs: 120000,
+    });
+    await client.request("agent.wait", { runId: steering.runId, timeoutMs: 120000 });
+    await withinTest(terminal.promise, context.signal);
+    const history = await client.request<{ sessionId: string; messages: unknown[] }>(
+      "chat.history",
+      { sessionKey, limit: 20 },
+    );
+    await fs.writeFile(
+      path.join(destination, "completion.json"),
+      JSON.stringify(
+        { accepted, steering, steeringCalls, settled, history, events, records },
+        null,
+        2,
+      ),
+    );
+    expect(steeringCalls).toHaveLength(1);
+    expect(requestCount).toBe(2);
+    expect(records.filter((row) => row.kind === "admitted-user")).toHaveLength(2);
+    expect(records.filter((row) => row.kind === "native-final-committed")).toHaveLength(2);
+    expect(JSON.stringify(history)).toContain("NATIVE-A-ANSWER");
+    expect(JSON.stringify(history)).toContain("NATIVE-B-ANSWER");
+    expect(transport).toHaveLength(2);
+    expect(transport[1]!.request).toContain("B: answer this distinct steered synthetic request.");
+    const errors = events.filter((event) => {
+      const payload = event.payload as
+        | { state?: string; suppressErrorNotice?: boolean }
+        | undefined;
+      return (
+        event.event === "chat" && payload?.state === "error" && payload.suppressErrorNotice !== true
+      );
+    });
+    expect(errors).toHaveLength(0);
+    // Silence alone could pass while durable original-input receipt custody stays broken.
+    const sourceStore = await preparePendingInputStore(
+      { agentId: "main", sessionKey, sessionId: history.sessionId },
+      () => {},
+    );
+    try {
+      const identities = [
+        "synthetic-native-steering-before-observation:user",
+        "synthetic-native-steering-B:user",
+      ];
+      const receipts = [];
+      for (const [index, idempotencyKey] of identities.entries()) {
+        const source = await sourceStore.read({
+          kind: "settlement",
+          sessionKey,
+          sessionId: history.sessionId,
+          idempotencyKey,
+        });
+        expect(source.kind).toBe("settlement");
+        if (source.kind !== "settlement") {
+          throw new Error("Native source settlement returned another operation");
+        }
+        receipts.push(source);
+        const marker = index === 0 ? "NATIVE-A-ANSWER" : "NATIVE-B-ANSWER";
+        const final = records.find(
+          (row) =>
+            row.kind === "native-final-committed" && JSON.stringify(row.message).includes(marker),
+        );
+        expect(final?.entryId).toBeTypeOf("string");
+        expect(source.row?.sourceDelivery).toMatchObject({
+          kind: "answer",
+          responderRunId: accepted.runId,
+          platformMessageId: final!.entryId,
+        });
+      }
+      await fs.writeFile(
+        path.join(destination, "source-settlement.json"),
+        JSON.stringify(receipts, null, 2),
+      );
+      expect(receipts[0]!.row?.sourceDelivery?.platformMessageId).not.toBe(
+        receipts[1]!.row?.sourceDelivery?.platformMessageId,
+      );
+    } finally {
+      await sourceStore.release();
+    }
+  } finally {
+    releaseFirstModel.resolve();
+    await runQaGatewayFixture(
+      async () => {},
+      () => client?.stopAndWait(),
+      () => server?.close({ reason: "Synthetic proof complete" }),
+      () => listener.closeUnadopted(),
+      () => state.cleanup(),
+      () => {
+        spy.mockRestore();
+        steeringSpy.mockRestore();
+        releaseNativeOwner();
+      },
+      () =>
+        fs.writeFile(path.join(destination, "transport.json"), JSON.stringify(transport, null, 2)),
+      () => {
+        captureProxy.closeAllConnections();
+        return new Promise<void>((resolve, reject) => {
+          captureProxy.close((error) => {
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          });
+        });
+      },
+      () => model.close(),
+      () =>
+        fs.writeFile(
+          path.join(destination, "cleanup.json"),
+          JSON.stringify({ joined: true, port: listener.port }),
+        ),
+      () =>
+        process.env.CONTINUITY_PROOF_OUTPUT
+          ? undefined
+          : fs.rm(destination, { recursive: true, force: true }),
+    );
+  }
+}, 300000);
