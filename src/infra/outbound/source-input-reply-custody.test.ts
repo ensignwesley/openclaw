@@ -1,4 +1,12 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { guardSessionManager } from "../../agents/session-tool-result-guard-wrapper.js";
+import { persistAgentSessionMessage } from "../../agents/sessions/agent-session-transcript.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { jsonResult } from "../../agents/tools/common.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { resolveMessageActionAgentRuntimeIdentity } from "../../agents/tools/gateway.js";
+import { createMessageToolAsync } from "../../agents/tools/message-tool-execution.js";
 import {
   setRuntimeConfigSnapshot,
   resetConfigRuntimeState,
@@ -11,15 +19,29 @@ import {
   resolveMessageActionTurnAuthorization,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import { setActivePluginRegistry, resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import { readUserTurnSourceInputs } from "../../sessions/user-turn-source-delivery.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   prepareTerminalSourceInputReply,
   settleTerminalSourceInputReply,
 } from "./source-reply-mirror.js";
 
-afterEach(() => resetConfigRuntimeState());
+afterEach(() => {
+  resetConfigRuntimeState();
+  resetPluginRuntimeStateForTest();
+});
 
 it.each([
   ["reply", false],
@@ -36,7 +58,10 @@ it.each([
         sessionId: "source-reply",
         storePath: `${state.agentDir()}/openclaw-agent.sqlite`,
       };
-      const cfg = { session: { store: scope.storePath } };
+      const cfg = {
+        session: { store: scope.storePath },
+        channels: { testchat: { enabled: true } },
+      };
       setRuntimeConfigSnapshot(cfg);
       const sessionEntry = { sessionId: scope.sessionId, updatedAt: 1 };
       await replaceSessionEntry(scope, sessionEntry);
@@ -44,6 +69,10 @@ it.each([
       const recorder = createUserTurnTranscriptRecorder({
         target: { ...scope, sessionEntry, config: cfg },
         input: {
+          text: "Native reply original",
+          timestamp: 1,
+          idempotencyKey: "source:user",
+          transport: { channel: "testchat", conversationRef: "room", messageId: "inbound" },
           requesterOrigin: {
             sessionKey: scope.sessionKey,
             messageProvider: "testchat",
@@ -51,12 +80,6 @@ it.each([
             accountId: "default",
             messageThreadId: threadId,
           },
-        },
-        message: {
-          role: "user",
-          content: "Native reply original",
-          timestamp: 1,
-          idempotencyKey: "source:user",
         },
       });
       const assertCurrent = () => {};
@@ -72,12 +95,51 @@ it.each([
           currentThreadTs: threadId,
           currentChatType: "direct" as const,
         };
-        const token = mintMessageActionTurnCapability({
+        let token = mintMessageActionTurnCapability({
           ...scope,
           runId: "actual-runtime-R",
           toolContext,
         });
-        advanceMessageActionPrompt({ ...scope, runId: "actual-runtime-R", recorder });
+        const manager = await SessionManager.openAsync(scope, state.agentDir());
+        const prepared = await recorder.resolveMessage();
+        expect(prepared).toBeDefined();
+        const before = manager.getBranch().length;
+        const guarded = guardSessionManager(manager, {
+          ...scope,
+          runId: "actual-runtime-R",
+          preparedUserTurnMessage: prepared,
+          preparedUserTurnTranscriptRecorder: recorder,
+          suppressNextUserMessagePersistence: true,
+        });
+        await persistAgentSessionMessage(
+          guarded,
+          { ...prepared!, content: "Rendered adopted original" },
+          { invalidateSerializedPrefixCache: false },
+        );
+        expect(manager.getBranch()).toHaveLength(before);
+        if (action === "thread-reply") {
+          // A real re-entry refreshes the capability but reuses the already-durable
+          // native input/manager. The guard deduplicates, rather than appending again.
+          revokeMessageActionTurnCapability(token);
+          token = mintMessageActionTurnCapability({
+            ...scope,
+            runId: "actual-runtime-R",
+            toolContext,
+          });
+          const rebound = guardSessionManager(guarded, {
+            ...scope,
+            runId: "actual-runtime-R",
+            preparedUserTurnMessage: prepared,
+            preparedUserTurnTranscriptRecorder: recorder,
+            suppressNextUserMessagePersistence: true,
+          });
+          await persistAgentSessionMessage(
+            rebound,
+            { ...prepared!, content: "Fallback re-entry of original" },
+            { invalidateSerializedPrefixCache: false },
+          );
+          expect(manager.getBranch()).toHaveLength(before);
+        }
         const auth = resolveMessageActionTurnAuthorization({
           token,
           ...scope,
@@ -102,8 +164,6 @@ it.each([
           toolCallId: "source-call",
           toolContext,
         };
-        const completion = await prepareTerminalSourceInputReply(params);
-        expect(completion).toMatchObject({ kind: "pending-final" });
         const readPending = () =>
           withSessionActor(
             scope,
@@ -112,25 +172,92 @@ it.each([
               (await actor.read({ assertCurrent, authorize: assertCurrent })).entry
                 ?.pendingFinalDelivery,
           );
-        expect((await readPending())?.deliveries).toMatchObject([{ state: "prepared" }]);
-        expect((await readPending())?.sourceRunId).toBe("actual-runtime-R");
-        await settleTerminalSourceInputReply(
-          completion,
-          {
-            ...params,
-            ...(ambiguous
-              ? {}
-              : {
-                  deliveredPayload: {
-                    ok: true,
-                    messageId: "actual-outbound",
-                    channelId: "room",
-                    receipt: threadId ? { threadId } : { replyToId: "inbound" },
-                  },
-                }),
+        const physical = vi.fn(async () => {
+          expect((await readPending())?.deliveries).toMatchObject([{ state: "prepared" }]);
+          expect((await readPending())?.sourceRunId).toBe("actual-runtime-R");
+          if (ambiguous) {
+            throw new Error("lost response after platform acceptance");
+          }
+          return jsonResult({
+            ok: true,
+            messageId: "actual-outbound",
+            channelId: "room",
+            receipt: threadId ? { threadId } : { replyToId: "inbound" },
+          });
+        });
+        const plugin = {
+          ...createChannelTestPluginBase({
+            id: "testchat",
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({ enabled: true }),
+              isConfigured: () => true,
+            },
+          }),
+          outbound: {
+            deliveryMode: "direct" as const,
+            sendText: async () => {
+              throw new Error("Unexpected text send");
+            },
           },
-          ambiguous ? new Error("lost response after platform acceptance") : undefined,
+          messaging: { targetResolver: { looksLikeId: () => true } },
+          actions: {
+            describeMessageTool: () => ({ actions: [action] }),
+            supportsAction: () => true,
+            resolveExecutionMode: () => "local" as const,
+            handleAction: physical,
+          },
+        };
+        setActivePluginRegistry(
+          createTestRegistry([{ pluginId: "testchat", source: "test", plugin }]),
         );
+        const operation = createReplyOperation({
+          ...scope,
+          resetTriggered: false,
+        });
+        operation.setPhase("running");
+        const operationalRunInstance = createOperationalRunInstanceRef("actual-runtime-R");
+        const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+        try {
+          await withGatewayToolCallerIdentity(
+            {
+              agentId: scope.agentId,
+              sessionKey: scope.sessionKey,
+              operationalRunInstance,
+              receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+            },
+            async () => {
+              const tool = await createMessageToolAsync({
+                ...scope,
+                runId: "actual-runtime-R",
+                config: cfg,
+                agentSessionKey: scope.sessionKey,
+                runSessionKey: scope.sessionKey,
+                messageActionTurnCapability: token,
+                agentAccountId: "default",
+                sourceReplyDeliveryMode: "message_tool_only",
+              });
+              const sent = tool.execute("source-call", {
+                action,
+                channel: "testchat",
+                target: "room",
+                messageId: "inbound",
+                message: "answer",
+                final: true,
+                ...(threadId ? { threadId, channelId: "room" } : {}),
+              });
+              if (ambiguous) {
+                await expect(sent).rejects.toThrow("lost response");
+              } else {
+                await sent;
+              }
+              expect(physical).toHaveBeenCalledOnce();
+            },
+          );
+        } finally {
+          releaseAgentRunDelegatedAuthority(authority);
+          operation.complete();
+        }
         const [source] = await readUserTurnSourceInputs(recorder, assertCurrent);
         const receipt = await source!.read!();
         if (ambiguous) {
@@ -220,6 +347,32 @@ it("binds committed steering to B's native message and actual responder, never A
         runId: "actual-runtime-R",
       })!;
       expect(auth.currentInput?.recorder).toBe(b);
+      const operationalRunInstance = createOperationalRunInstanceRef("actual-runtime-R");
+      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      try {
+        const identity = await withGatewayToolCallerIdentity(
+          {
+            agentId: scope.agentId,
+            sessionKey: scope.sessionKey,
+            operationalRunInstance,
+            receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+          },
+          () =>
+            resolveMessageActionAgentRuntimeIdentity({
+              opts: {},
+              target: "local",
+              runId: "actual-runtime-R",
+              sessionId: scope.sessionId,
+              turnCapability: token,
+              sourceReplyFinal: true,
+              sourceReplyToolCallId: "B-answer",
+            }),
+        );
+        expect(identity?.messageActionContext?.toolContext?.currentMessageId).toBe("inbound-B");
+        expect(identity?.messageActionContext?.toolContext?.currentSourceTurnId).toBeUndefined();
+      } finally {
+        releaseAgentRunDelegatedAuthority(authority);
+      }
       expect(auth.toolContext?.currentMessageId).toBe("inbound-B");
       expect(auth.toolContext?.currentSourceTurnId).not.toBe("channel-user:v1:source-A");
       const params = {
@@ -259,5 +412,151 @@ it("binds committed steering to B's native message and actual responder, never A
         recorder.finishPendingInput!("interrupted");
         await recorder.waitForPendingInputSettlement!();
       }
+    }
+  }));
+
+it("keeps a source-less native WebChat capability usable for explicit external actions", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:webchat",
+      sessionId: "webchat",
+      storePath: `${state.agentDir()}/openclaw-agent.sqlite`,
+    };
+    const cfg = { session: { store: scope.storePath }, channels: { testchat: { enabled: true } } };
+    setRuntimeConfigSnapshot(cfg);
+    const sessionEntry = { sessionId: scope.sessionId, updatedAt: 1 };
+    await replaceSessionEntry(scope, sessionEntry);
+    const recorder = createUserTurnTranscriptRecorder({
+      target: { ...scope, sessionEntry, config: cfg },
+      input: {
+        text: "WebChat original",
+        timestamp: 1,
+        idempotencyKey: "webchat:user",
+        requesterOrigin: { sessionKey: scope.sessionKey, messageProvider: "webchat" },
+      },
+    });
+    const operationalRunInstance = createOperationalRunInstanceRef("webchat-R");
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const token = mintMessageActionTurnCapability({ ...scope, runId: "webchat-R" });
+    try {
+      await recorder.stageApproved!({ runId: "webchat-R", assertCurrent() {} });
+      await recorder.persistApproved();
+      const prepared = await recorder.resolveMessage();
+      const manager = await SessionManager.openAsync(scope, state.agentDir());
+      const guarded = guardSessionManager(manager, {
+        ...scope,
+        runId: "webchat-R",
+        preparedUserTurnMessage: prepared,
+        preparedUserTurnTranscriptRecorder: recorder,
+        suppressNextUserMessagePersistence: true,
+      });
+      await persistAgentSessionMessage(
+        guarded,
+        { ...prepared!, content: "Rendered WebChat original" },
+        { invalidateSerializedPrefixCache: false },
+      );
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: scope.agentId,
+          sessionKey: scope.sessionKey,
+          operationalRunInstance,
+          receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+        },
+        async () => {
+          const identity = await resolveMessageActionAgentRuntimeIdentity({
+            opts: {},
+            target: "local",
+            runId: "webchat-R",
+            sessionId: scope.sessionId,
+            turnCapability: token,
+            sourceReplyFinal: true,
+            sourceReplyToolCallId: "external-call",
+          });
+          expect(identity).toBeDefined();
+          expect(identity?.messageActionContext?.toolContext?.currentSourceTurnId).toBeUndefined();
+          const auth = resolveMessageActionTurnAuthorization({
+            token,
+            ...scope,
+            runId: "webchat-R",
+          })!;
+          expect(
+            await prepareTerminalSourceInputReply({
+              ...scope,
+              cfg,
+              action: "send",
+              channel: "testchat",
+              actionParams: { target: "external", message: "External answer" },
+              toolContext: auth.toolContext,
+              currentInput: auth.currentInput,
+              sourceReplyFinal: true,
+              toolCallId: "external-call",
+            }),
+          ).toBeUndefined();
+          const sends = vi.fn(async () =>
+            jsonResult({ ok: true, messageId: "external-1", channelId: "external" }),
+          );
+          const plugin = {
+            ...createChannelTestPluginBase({
+              id: "testchat",
+              config: {
+                listAccountIds: () => ["default"],
+                resolveAccount: () => ({ enabled: true }),
+                isConfigured: () => true,
+              },
+            }),
+            outbound: {
+              deliveryMode: "direct" as const,
+              sendText: async () => ({ channel: "testchat", messageId: "external-1" }),
+            },
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            actions: {
+              describeMessageTool: () => ({ actions: ["send" as const] }),
+              supportsAction: () => true,
+              resolveExecutionMode: () => "local" as const,
+              handleAction: sends,
+            },
+          };
+          setActivePluginRegistry(
+            createTestRegistry([{ pluginId: "testchat", source: "test", plugin }]),
+          );
+          const tool = await createMessageToolAsync({
+            ...scope,
+            runId: "webchat-R",
+            config: cfg,
+            agentSessionKey: scope.sessionKey,
+            runSessionKey: scope.sessionKey,
+            messageActionTurnCapability: token,
+            agentAccountId: "default",
+          });
+          await tool.execute("external-call", {
+            action: "send",
+            channel: "testchat",
+            target: "external",
+            message: "External answer",
+            final: true,
+          });
+          expect(sends).toHaveBeenCalledOnce();
+          revokeMessageActionTurnCapability(token);
+          await expect(
+            resolveMessageActionAgentRuntimeIdentity({
+              opts: {},
+              target: "local",
+              runId: "webchat-R",
+              sessionId: scope.sessionId,
+              turnCapability: token,
+              sourceReplyFinal: true,
+              sourceReplyToolCallId: "stale-call",
+            }),
+          ).rejects.toThrow("active turn capability");
+        },
+      );
+      const [original] = await readUserTurnSourceInputs(recorder, () => {});
+      expect(await original!.read!()).toBeUndefined();
+    } finally {
+      revokeMessageActionTurnCapability(token);
+      releaseAgentRunDelegatedAuthority(authority);
+      recorder.finishPendingInput!("interrupted");
+      await recorder.waitForPendingInputSettlement!();
     }
   }));

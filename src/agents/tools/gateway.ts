@@ -25,7 +25,10 @@ import {
 } from "../../gateway/agent-runtime-identity-token.js";
 import { callGateway, type CallGatewayOptions } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
-import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
+import {
+  resolveMessageActionTurnCapability,
+  resolveMessageActionTurnAuthorization,
+} from "../../gateway/message-action-turn-capability.js";
 import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
@@ -534,13 +537,14 @@ async function resolveMessageActionIdentity<T>(
   }
   const turnCapabilitySessionKey =
     normalizeOptionalString(params.turnCapabilitySessionKey) ?? identity.sessionKey;
-  const messageActionContext = resolveMessageActionTurnCapability({
+  const lookup = {
     token: params.turnCapability,
     agentId: identity.agentId,
     runId: params.runId,
     sessionKey: turnCapabilitySessionKey,
     sessionId: params.sessionId,
-  });
+  };
+  const messageActionContext = resolveMessageActionTurnCapability(lookup);
   if (!messageActionContext) {
     if (terminalSourceReply) {
       throw new Error(
@@ -549,11 +553,18 @@ async function resolveMessageActionIdentity<T>(
     }
     return undefined;
   }
-  if (
-    terminalSourceReply &&
-    !normalizeOptionalString(messageActionContext.toolContext?.currentSourceTurnId)
-  ) {
-    throw new Error("terminal source reply requires source-turn correlation");
+  if (terminalSourceReply) {
+    // Ingress correlation belongs to the ingress original, not a later committed
+    // steering input. Redeem that original's existing host-only native authority
+    // instead; never serialize its recorder or copy the previous source token.
+    const currentInput = resolveMessageActionTurnAuthorization(lookup)?.currentInput;
+    currentInput?.assertCurrent();
+    if (
+      !currentInput &&
+      !normalizeOptionalString(messageActionContext.toolContext?.currentSourceTurnId)
+    ) {
+      throw new Error("terminal source reply requires source-turn correlation");
+    }
   }
   if (usesUntrustedGatewayContext) {
     // Remote gateways cannot trust caller-supplied turn metadata. Keep source

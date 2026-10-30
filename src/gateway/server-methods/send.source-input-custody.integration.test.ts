@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   closeHttpServer,
@@ -14,6 +15,9 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { guardSessionManager } from "../../agents/session-tool-result-guard-wrapper.js";
+import { persistAgentSessionMessage } from "../../agents/sessions/agent-session-transcript.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { SessionTranscriptContinuityError } from "../../agents/sessions/transcript-turn-error.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resolveMessageActionAgentRuntimeIdentity } from "../../agents/tools/gateway.js";
@@ -42,8 +46,9 @@ import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
+import { verifyAgentRuntimeIdentityToken } from "../agent-runtime-identity-token.js";
+import type { CallGatewayOptions } from "../call.js";
 import {
-  advanceMessageActionPrompt,
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../message-action-turn-capability.js";
@@ -52,11 +57,25 @@ import { createAgentRuntimeGatewayClientForTests } from "./send.test-helpers.js"
 import { makeContext } from "./send.test-support.js";
 import type { RespondFn } from "./types.js";
 
-afterEach(() => resetPluginRuntimeStateForTest());
+const gatewayTransport = vi.hoisted(() => ({ call: vi.fn() }));
+// mock-isolation: only the Gateway wire is replaced. The real producer redeems and
+// signs runtime identity; the receiving real handler verifies/uses it before QA HTTP I/O.
+vi.mock("../call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../call.js")>()),
+  callGatewayLeastPrivilege: gatewayTransport.call,
+}));
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+  gatewayTransport.call.mockReset();
+});
 
 type QaBusState = { getSnapshot: () => QaBusStateSnapshot };
 
 it.for([
+  { mode: "producer-gateway-send", ambiguous: false },
+  { mode: "producer-gateway-send", ambiguous: true },
+  { mode: "producer-gateway-thread-reply", ambiguous: false },
+  { mode: "producer-gateway-thread-reply", ambiguous: true },
   { mode: "gateway-send", ambiguous: false },
   { mode: "gateway-send", ambiguous: true },
   { mode: "gateway-thread-reply", ambiguous: false },
@@ -209,13 +228,24 @@ it.for([
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg, cfg);
       setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "qa-channel", source: "test", plugin: qaChannelPlugin }]),
+        createTestRegistry([
+          {
+            pluginId: "qa-channel",
+            source: "test",
+            plugin: mode.startsWith("producer-gateway")
+              ? {
+                  ...qaChannelPlugin,
+                  actions: { ...qaChannelPlugin.actions, resolveExecutionMode: () => "gateway" },
+                }
+              : qaChannelPlugin,
+          },
+        ]),
       );
       await replaceSessionEntry(scope, { sessionId: identity.sessionId, updatedAt: 1 });
       const operation = createReplyOperation({ ...identity, resetTriggered: false });
       operation.setPhase("running");
       resources.defer(() => operation.complete());
-      const recorder = createUserTurnTranscriptRecorder({
+      let recorder = createUserTurnTranscriptRecorder({
         target: {
           ...scope,
           sessionEntry: { sessionId: identity.sessionId, updatedAt: 1 },
@@ -264,7 +294,57 @@ it.for([
       resources.defer(() => {
         revokeMessageActionTurnCapability(capability);
       });
-      advanceMessageActionPrompt({ ...identity, recorder });
+      const originalA = recorder;
+      const manager = await SessionManager.openAsync(scope, state.agentDir());
+      const adopt = async (input: typeof recorder, suppress: boolean) => {
+        const prepared = await input.resolveMessage();
+        expect(prepared).toBeDefined();
+        const count = manager.getBranch().length;
+        const guarded = guardSessionManager(manager, {
+          ...identity,
+          preparedUserTurnMessage: prepared,
+          preparedUserTurnTranscriptRecorder: input,
+          suppressNextUserMessagePersistence: suppress,
+        });
+        await persistAgentSessionMessage(
+          guarded,
+          { ...prepared!, content: "Rendered exact native original" },
+          { invalidateSerializedPrefixCache: false },
+        );
+        expect(manager.getBranch()).toHaveLength(count + (suppress ? 0 : 1));
+      };
+      // Fresh fallback/adopted capability binds without reappending durable A.
+      await adopt(recorder, true);
+      if (!mode.startsWith("producer-local")) {
+        recorder = createUserTurnTranscriptRecorder({
+          target: {
+            ...scope,
+            sessionEntry: { sessionId: identity.sessionId, updatedAt: 1 },
+            config: cfg,
+          },
+          input: {
+            text: "Committed steered source B",
+            timestamp: 2,
+            idempotencyKey: "qa-native-B:user",
+            requesterOrigin: {
+              sessionKey: identity.sessionKey,
+              messageProvider: "qa-channel",
+              conversationId: target,
+              messageThreadId: threadId,
+              accountId: "default",
+              chatType: action === "thread-reply" ? "channel" : "direct",
+            },
+            transport: { channel: "qa-channel", conversationRef: target, messageId: "inbound-B" },
+          },
+        });
+        await recorder.stageApproved!({ runId: "qa-steering-B", assertCurrent() {} });
+        // Actual native guarded append/consume, not a manual capability advance.
+        await adopt(recorder, false);
+        resources.defer(async () => {
+          originalA.finishPendingInput!("interrupted");
+          await originalA.waitForPendingInputSettlement!();
+        });
+      }
       const context = makeContext(() => cfg);
       context.validateAgentRuntimeApprovalAuthority =
         createAgentRuntimeApprovalAuthorityValidator();
@@ -272,6 +352,33 @@ it.for([
         sendHandlers["message.action"],
         "Gateway message.action handler",
       );
+      gatewayTransport.call.mockImplementation(async (options: CallGatewayOptions) => {
+        expect(options.method).toBe("message.action");
+        const runtimeIdentity = expectDefined(
+          await verifyAgentRuntimeIdentityToken(options.agentRuntimeIdentityToken),
+          "real producer signed runtime identity",
+        );
+        expect(runtimeIdentity.messageActionContext?.toolContext?.currentMessageId).toBe(
+          "inbound-B",
+        );
+        expect(
+          runtimeIdentity.messageActionContext?.toolContext?.currentSourceTurnId,
+        ).toBeUndefined();
+        const respond = vi.fn<RespondFn>();
+        await handler({
+          req: { type: "req", id: "producer-gateway-wire", method: "message.action" },
+          params: expectDefined(asOptionalRecord(options.params), "producer message.action params"),
+          context,
+          client: createAgentRuntimeGatewayClientForTests(runtimeIdentity),
+          isWebchatConnect: () => false,
+          respond,
+        });
+        const response = expectDefined(respond.mock.calls[0], "actual Gateway handler response");
+        if (!response[0]) {
+          throw new Error(response[2]?.message ?? "Gateway handler refused");
+        }
+        return response[1];
+      });
       const invoke = (toolCallId: string, idempotencyKey: string) => {
         const running = withGatewayToolCallerIdentity(
           {
@@ -281,10 +388,7 @@ it.for([
             receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
           },
           async () => {
-            if (mode.startsWith("producer-local")) {
-              expect(qaChannelPlugin.actions?.resolveExecutionMode?.({ action }) ?? "local").toBe(
-                "local",
-              );
+            if (mode.startsWith("producer")) {
               const tool = await createMessageToolAsync({
                 ...identity,
                 agentSessionKey: identity.sessionKey,
@@ -335,8 +439,16 @@ it.for([
               sessionId: identity.sessionId,
               sourceReplyFinal: true,
               sourceReplyToolCallId: toolCallId,
-              toolContext: { currentSourceTurnId: sourceTurnId },
+              toolContext: { currentChannelProvider: "qa-channel" },
             });
+            expect(
+              runtimeIdentity.messageActionContext?.toolContext?.currentSourceTurnId,
+            ).toBeUndefined();
+            if (recorder !== originalA) {
+              expect(runtimeIdentity.messageActionContext?.toolContext?.currentMessageId).toBe(
+                "inbound-B",
+              );
+            }
             const respond = vi.fn<RespondFn>();
             await handler({
               req: { type: "req", id: toolCallId, method: "message.action" },
@@ -381,12 +493,17 @@ it.for([
       if (ambiguous) {
         expect([failed[0], failed[2]?.code]).toEqual([
           false,
-          mode.startsWith("producer-local") ? "LOCAL_TRANSPORT_EXCEPTION" : "UNAVAILABLE",
+          mode.startsWith("producer") ? "LOCAL_TRANSPORT_EXCEPTION" : "UNAVAILABLE",
         ]);
       } else {
         expect(failed[0]).toBe(true);
       }
       const [original] = await readUserTurnSourceInputs(recorder, () => {});
+      if (recorder !== originalA) {
+        const [untouchedA] = await readUserTurnSourceInputs(originalA, () => {});
+        expect(await untouchedA!.read!()).toBeUndefined();
+        expect(original!.identity?.idempotencyKey).toBe("qa-native-B:user");
+      }
       evidence.sourceIdentity = original!.identity;
       const receipt = await original!.read!();
       const pending = await withSessionActor(
@@ -439,6 +556,8 @@ it.for([
       if (mode.startsWith("producer-local")) {
         expect(second[0]).toBe(true);
         expect(second[1]).toMatchObject({ skipped: true });
+      } else if (mode.startsWith("producer-gateway")) {
+        expect(second[0]).toBe(!ambiguous);
       } else {
         expect(second.slice(0, 3)).toEqual(failed.slice(0, 3));
         expect(second[3]?.cached).toBe(true);

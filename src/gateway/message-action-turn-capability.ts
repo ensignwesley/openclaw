@@ -426,6 +426,7 @@ export function resolveMessageActionTurnAuthorization(
                   ) {
                     throw new Error("Original input turn capability is no longer current");
                   }
+                  inputRecorder.assertPendingInputLifetimeCurrent?.();
                 },
               },
             }
@@ -466,7 +467,7 @@ export function advanceMessageActionPrompt(params: {
     const previousInput = capability.inputRecorder;
     capability.inputRecorder =
       params.recorder && receipt?.sessionId === params.sessionId ? params.recorder : undefined;
-    if (previousInput && previousInput !== capability.inputRecorder) {
+    if (previousInput !== capability.inputRecorder) {
       const owner =
         capability.inputRecorder && getUserTurnTranscriptAdmissionOwner(capability.inputRecorder);
       const origin = owner?.requesterOrigin();

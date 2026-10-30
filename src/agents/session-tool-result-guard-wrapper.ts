@@ -326,16 +326,25 @@ function createTranscriptRunContext(
       });
       await onUserMessagePersisted?.(persistence.persistedMessage, runtimeMessage);
     },
-    onUserMessagePersistenceSuppressed: async (message) => {
+    onUserMessagePersistenceSuppressed: async (message: PersistedUserTurnMessage) => {
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
       runtimeUserMessageByPersistedMessage.delete(message);
-      const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
-      publishPersistedUserEnvelope(
-        runtimeMessage,
-        recorder?.getPersistedMessage?.() ??
-          preparedUserTurnTranscriptRecorder?.getPersistedMessage?.() ??
-          message,
-      );
+      const recorder =
+        takeRuntimeUserTurnTranscriptRecorder(message) ?? preparedUserTurnTranscriptRecorder;
+      const persisted = recorder?.getPersistedMessage?.();
+      publishPersistedUserEnvelope(runtimeMessage, persisted ?? message);
+      // Adoption/fallback deliberately suppresses a duplicate append. Publish the
+      // same native admission only when this is its already-durable original.
+      if (persisted?.idempotencyKey && persisted.idempotencyKey === message.idempotencyKey) {
+        publishCommittedUserTurnInput(recorder, persisted);
+        advanceMessageActionPrompt({
+          runId,
+          agentId,
+          sessionKey,
+          sessionId: sessionManager.getSessionId(),
+          recorder,
+        });
+      }
       await onUserMessagePersistenceSuppressed?.(message, runtimeMessage);
     },
     onUserMessageBlocked,
