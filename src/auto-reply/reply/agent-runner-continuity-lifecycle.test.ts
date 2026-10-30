@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
 import { SessionTranscriptContinuityError } from "../../agents/sessions/transcript-turn-error.js";
 import {
@@ -6,6 +7,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withSessionActor } from "../../config/sessions/session-actor-scope.js";
+import { preparePendingInputStore } from "../../config/sessions/session-pending-input-store.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
@@ -25,7 +27,15 @@ import type { FollowupRun } from "./queue/types.js";
 
 afterEach(() => resetConfigRuntimeState());
 
-it.each(["staged", "mixed", "pending", "live", "mixed-live", "reservation"] as const)(
+it.each([
+  "staged",
+  "staged-live",
+  "mixed",
+  "pending",
+  "live",
+  "mixed-live",
+  "reservation",
+] as const)(
   "retains an exact owned outcome after native %s continuity failure and real terminal cleanup",
   (mode) =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -157,7 +167,7 @@ it.each(["staged", "mixed", "pending", "live", "mixed-live", "reservation"] as c
       }
       const successor = { ...followupRun, userTurnTranscriptRecorder: a };
       const recovery =
-        mode === "live" || mode === "mixed-live"
+        mode === "live" || mode === "mixed-live" || mode === "staged-live"
           ? claimSessionControllerInput(successor)
           : undefined;
       const reservation =
@@ -187,20 +197,43 @@ it.each(["staged", "mixed", "pending", "live", "mixed-live", "reservation"] as c
         const next = createReplyOperation({ ...scope, resetTriggered: false, mailboxClaim: claim });
         next.setPhase("running");
         expect(isCurrentSessionControllerOperation(next)).toBe(true);
-        const fresh = make("A");
-        await fresh.stageApproved!({
-          runId: "ingress-A",
-          assertCurrent() {
-            if (!isCurrentSessionControllerOperation(next)) {
-              throw new Error("Successor lost custody");
-            }
-          },
-        });
-        expect(
-          (await readUserTurnSourceInputs(fresh, () => {})).map((input) => input.identity),
-        ).toEqual([originals[0]!.identity]);
-        fresh.finishPendingInput!("cancelled");
-        await fresh.waitForPendingInputSettlement!();
+        if (mode === "staged-live") {
+          // A runnable waiter is real, but it shares the original staged recorder.
+          // The failed owner's actual cleanup cancelled/released that custody.
+          await expect(a.persistApproved()).rejects.toThrow("Pending input ownership ended");
+          expect(a.getAdmissionReceipt()).toBeUndefined();
+          const fresh = make("A");
+          await expect(
+            fresh.stageApproved!({
+              runId: "ingress-A",
+              assertCurrent() {
+                if (!isCurrentSessionControllerOperation(next)) {
+                  throw new Error("Successor lost custody");
+                }
+              },
+            }),
+          ).rejects.toThrow("Pending input ownership ended");
+          expect(fresh.getAdmissionReceipt()).toBeUndefined();
+          fresh.finishPendingInput!("cancelled");
+          await fresh.waitForPendingInputSettlement!();
+        } else {
+          const fresh = make("A");
+          await fresh.stageApproved!({
+            runId: "ingress-A",
+            assertCurrent() {
+              if (!isCurrentSessionControllerOperation(next)) {
+                throw new Error("Successor lost custody");
+              }
+            },
+          });
+          await fresh.persistApproved();
+          expect(
+            (await readUserTurnSourceInputs(fresh, () => {})).map((input) => input.identity),
+          ).toEqual([originals[0]!.identity]);
+          expect(fresh.getAdmissionReceipt()).toBeDefined();
+          fresh.finishPendingInput!("cancelled");
+          await fresh.waitForPendingInputSettlement!();
+        }
         // A real retained waiter became the actual successor after failed-owner cleanup.
         expect(claim.sources).toEqual([successor]);
         next.complete();
@@ -244,6 +277,51 @@ it.each(["staged", "mixed", "pending", "live", "mixed-live", "reservation"] as c
           throw new Error("Missing native notice intent");
         }
         expect(retained.text).toBe(result!.payload?.text);
+        if (mode === "staged-live") {
+          // The staged successor cannot safely resume. Its addressed notice still
+          // owns the exact original after cancellation, through actual settlement.
+          await settlePendingFinalDelivery(
+            {
+              ...scope,
+              kind: "pending-final",
+              intentId: expectDefined(retained.intentId, "native addressed notice identity"),
+              deliveryId: expectDefined(retained.deliveries?.[0], "native notice transport member")
+                .id,
+            },
+            "delivered",
+            undefined,
+            {
+              clearAfterSettled: true,
+              identifiedResult: {
+                channel: "whatsapp",
+                messageId: "notice-A",
+                target: { kind: "chat", id: "synthetic-source" },
+              },
+            },
+          );
+          const store = await preparePendingInputStore(scope, () => {});
+          try {
+            const settlement = await store.read({
+              ...scope,
+              ...originals[0]!.identity!,
+              kind: "settlement",
+            });
+            expect(settlement).toMatchObject({
+              kind: "settlement",
+              current: true,
+              row: {
+                sourceDelivery: {
+                  kind: "failure-notice",
+                  responderRunId: "failed-attempt-R",
+                  platformMessageId: "notice-A",
+                },
+              },
+            });
+          } finally {
+            await store.release();
+          }
+          expect(await readPending()).toBeUndefined();
+        }
       }
     }),
 );

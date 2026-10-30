@@ -90,9 +90,10 @@ export async function prepareContinuityFailureNotice(
   if (completed?.reason === "completed") {
     return { disposition: "unknown" };
   }
-  // A staged native input proves custody, not a successor. Match each original
-  // against a runnable, positively retained native source, never an admission union.
+  // Failed-owner cleanup cancels unconsumed custody even if a waiter shares it.
+  // Only consumed originals can survive that cleanup through a runnable successor.
   const recoveryOwnsInput = (original: (typeof originals)[number]) =>
+    original.consumed &&
     getSessionControllerEntryForOperation(operation).mailbox?.entries.some((input) => {
       if (!hasLiveSessionControllerSourceExecution(input)) {
         return false;
