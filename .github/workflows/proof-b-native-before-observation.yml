@@ -44,6 +44,8 @@ jobs:
           src/infra/outbound/source-input-reply-custody.test.ts
           src/agents/tools/message-tool.current-prompt-reaction.test.ts
           src/auto-reply/reply/agent-runner-continuity-lifecycle.test.ts
+          src/auto-reply/reply/agent-runner-continuity-writer.test.ts
+          src/sessions/user-turn-native-source-lifetime.test.ts
           src/auto-reply/reply/agent-runner-execution-terminal-failures.test.ts
           --maxWorkers=1
       - name: Actual source-tool HTTP acceptance and ambiguity

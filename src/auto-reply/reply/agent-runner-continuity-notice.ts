@@ -42,6 +42,7 @@ export async function prepareContinuityFailureNotice(
   >,
   runId: string,
   inputRecorder?: UserTurnTranscriptRecorder | null,
+  writer?: Parameters<typeof withAgentTurnCompletion>[0]["writer"],
 ): Promise<{
   disposition: ContinuityFailureDisposition;
   payload?: ReplyPayload;
@@ -125,6 +126,7 @@ export async function prepareContinuityFailureNotice(
       storePath,
       sessionKey,
       entry: turn.getActiveSessionEntry(),
+      writer,
       operation,
       recorder,
       publish() {},

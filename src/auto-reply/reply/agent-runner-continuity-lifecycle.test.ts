@@ -57,270 +57,313 @@ it.each([
       };
       await replaceSessionEntry(scope, entry);
       const operation = createReplyOperation({ ...scope, resetTriggered: false });
-      operation.setPhase("running");
-      const assertCurrent = () => {
-        if (!isCurrentSessionControllerOperation(operation)) {
-          throw new Error("Native test operation lost custody");
-        }
-      };
-      const make = (key: string) =>
-        createUserTurnTranscriptRecorder({
-          target: { ...scope, sessionEntry: entry, config: cfg },
-          input: {
-            text: `${key} accepted synthetic original`,
-            timestamp: 1000,
-            idempotencyKey: `${key}:user`,
-          },
-        });
-      const a = make("A");
-      await a.stageApproved!({ runId: "ingress-A", assertCurrent });
-      if (mode === "live" || mode === "reservation") {
-        await a.persistApproved();
-      }
-      const b = mode === "mixed" || mode === "mixed-live" ? make("B") : undefined;
-      if (b) {
-        await a.persistApproved();
-        await b.stageApproved!({ runId: "ingress-B", assertCurrent });
-      }
-      const recorder = b
-        ? createUserTurnTranscriptRecorder({
-            target: { ...scope, sessionEntry: entry, config: cfg },
-            input: { text: "Collected A and B", idempotencyKey: "aggregate:user" },
-            pendingInputSources: [a, b],
-          })
-        : a;
-      const followupRun: FollowupRun = {
-        prompt: "Synthetic R2 attempt",
-        enqueuedAt: 0,
-        userTurnTranscriptRecorder: recorder,
-        run: {
-          ...scope,
-          agentDir: state.agentDir(),
-          sessionFile: scope.storePath,
-          workspaceDir: state.workspaceDir,
-          config: cfg,
-          provider: "fixture",
-          model: "fixture",
-          timeoutMs: 1000,
-          blockReplyBreak: "message_end",
-        },
-      };
-      const turn = {
-        sessionKey: scope.sessionKey,
-        storePath: scope.storePath,
-        replyOperation: operation,
-        followupRun,
-        getActiveSessionEntry: () => entry,
-        sessionCtx: {
-          Provider: "whatsapp",
-          Surface: "whatsapp",
-          OriginatingChannel: "whatsapp",
-          OriginatingTo: "synthetic-source",
-          AccountId: "default",
-          ChatType: "direct" as const,
-          SessionKey: scope.sessionKey,
-        },
-      };
-      const context = resolveReplyRunDeliveryContext({
-        cfg,
-        sessionCtx: turn.sessionCtx,
-        sessionEntry: entry,
-        sessionKey: scope.sessionKey,
-      });
-      expect(context).toMatchObject({ channel: "whatsapp", to: "synthetic-source" });
-      const originals = await readUserTurnSourceInputs(recorder, assertCurrent);
-      expect(originals.map((input) => input.consumed)).toEqual(
-        b ? [true, false] : [mode === "live" || mode === "reservation"],
-      );
-      const readPending = () =>
-        withSessionActor(
-          scope,
-          { assertCurrent() {}, assertReadable() {} },
-          async (actor) =>
-            (await actor.read({ assertCurrent() {}, authorize() {} })).entry?.pendingFinalDelivery,
-        );
-      if (mode === "pending") {
-        await withAgentTurnCompletion(
-          { ...scope, entry, operation, recorder, publish() {} },
-          async (completion) => {
-            await completion!.complete({
-              kind: "replayable",
-              text: "Existing addressed notice",
-              sourceOutcome: "failure-notice",
-              intentId: "existing-intent",
-              sourceRunId: "existing-responder",
-              deliveries: [{ id: "existing-member", state: "prepared" }],
-              context,
-              createdAt: 1,
-            });
-          },
-        );
-        await settlePendingFinalDelivery(
-          {
-            ...scope,
-            kind: "pending-final",
-            intentId: "existing-intent",
-            deliveryId: "existing-member",
-          },
-          "unknown",
-        );
-      }
-      const successor = { ...followupRun, userTurnTranscriptRecorder: a };
-      const recovery =
-        mode === "live" || mode === "mixed-live" || mode === "staged-live"
-          ? claimSessionControllerInput(successor)
-          : undefined;
-      const reservation =
-        mode === "reservation"
-          ? submitSessionControllerInput(scope.sessionKey, successor, { mode: "followup" })
-          : undefined;
-      let result: Awaited<ReturnType<typeof prepareContinuityFailureNotice>>;
+      const recorders: ReturnType<typeof createUserTurnTranscriptRecorder>[] = [];
+      let recovery: ReturnType<typeof claimSessionControllerInput> | undefined;
+      let reservation: ReturnType<typeof submitSessionControllerInput> | undefined;
       try {
-        try {
-          throw new SessionTranscriptContinuityError(
-            "projection_read_fence",
-            "Deterministic native failure before remaining user consumption",
-          );
-        } catch (error) {
-          expect(error).toBeInstanceOf(SessionTranscriptContinuityError);
-          result = await prepareContinuityFailureNotice(turn, "failed-attempt-R", recorder);
-        }
-      } finally {
-        // These are the actual native chat terminal cleanup APIs, not a mocked disposition.
-        recorder.finishPendingInput!("cancelled");
-        await recorder.waitForPendingInputSettlement!();
-        operation.complete();
-      }
-      expect(isCurrentSessionControllerOperation(operation)).toBe(false);
-      if (recovery) {
-        const claim = await recovery;
-        const next = createReplyOperation({ ...scope, resetTriggered: false, mailboxClaim: claim });
-        next.setPhase("running");
-        expect(isCurrentSessionControllerOperation(next)).toBe(true);
-        if (mode === "staged-live") {
-          // A runnable waiter is real, but it shares the original staged recorder.
-          // The failed owner's actual cleanup cancelled/released that custody.
-          await expect(a.persistApproved()).rejects.toThrow("Pending input ownership ended");
-          expect(a.getAdmissionReceipt()).toBeUndefined();
-          const fresh = make("A");
-          await expect(
-            fresh.stageApproved!({
-              runId: "ingress-A",
-              assertCurrent() {
-                if (!isCurrentSessionControllerOperation(next)) {
-                  throw new Error("Successor lost custody");
-                }
-              },
-            }),
-          ).rejects.toThrow("Pending input ownership ended");
-          expect(fresh.getAdmissionReceipt()).toBeUndefined();
-          fresh.finishPendingInput!("cancelled");
-          await fresh.waitForPendingInputSettlement!();
-        } else {
-          const fresh = make("A");
-          await fresh.stageApproved!({
-            runId: "ingress-A",
-            assertCurrent() {
-              if (!isCurrentSessionControllerOperation(next)) {
-                throw new Error("Successor lost custody");
-              }
+        operation.setPhase("running");
+        const assertCurrent = () => {
+          if (!isCurrentSessionControllerOperation(operation)) {
+            throw new Error("Native test operation lost custody");
+          }
+        };
+        const make = (key: string) => {
+          const recorder = createUserTurnTranscriptRecorder({
+            target: { ...scope, sessionEntry: entry, config: cfg },
+            input: {
+              text: `${key} accepted synthetic original`,
+              timestamp: 1000,
+              idempotencyKey: `${key}:user`,
             },
           });
-          await fresh.persistApproved();
-          expect(
-            (await readUserTurnSourceInputs(fresh, () => {})).map((input) => input.identity),
-          ).toEqual([originals[0]!.identity]);
-          expect(fresh.getAdmissionReceipt()).toBeDefined();
-          fresh.finishPendingInput!("cancelled");
-          await fresh.waitForPendingInputSettlement!();
+          recorders.push(recorder);
+          return recorder;
+        };
+        const a = make("A");
+        await a.stageApproved!({ runId: "ingress-A", assertCurrent });
+        if (mode === "live" || mode === "reservation") {
+          await a.persistApproved();
         }
-        // A real retained waiter became the actual successor after failed-owner cleanup.
-        expect(claim.sources).toEqual([successor]);
-        next.complete();
-        releaseSessionControllerClaim(claim);
-        await claim.settlement.promise;
-      }
-      if (reservation) {
-        retireSessionControllerInput(reservation);
-        await reservation.settlement.promise;
-      }
-      const retained = await readPending();
-      if (mode === "live") {
-        expect(result!.disposition).toBe("recovering");
-        expect(retained).toBeUndefined();
-      } else if (mode === "pending") {
-        expect(result!.disposition).toBe("delivery-unknown");
-        expect(result!.payload).toBeUndefined();
-        expect(retained).toMatchObject({
-          intentId: "existing-intent",
-          deliveries: [{ state: "unknown" }],
-        });
-      } else {
-        expect(result!.disposition).toBe("saved-unanswered");
-        if (mode === "mixed-live") {
-          expect(result!.payload?.text).not.toContain("A accepted synthetic original");
-        } else {
-          expect(result!.payload?.text).toContain("A accepted synthetic original");
-        }
+        const b = mode === "mixed" || mode === "mixed-live" ? make("B") : undefined;
         if (b) {
-          expect(result!.payload?.text).toContain("B accepted synthetic original");
+          await a.persistApproved();
+          await b.stageApproved!({ runId: "ingress-B", assertCurrent });
         }
-        expect(result!.payload?.text?.match(/I couldn't answer your/g)).toHaveLength(
-          b && mode !== "mixed-live" ? 2 : 1,
-        );
-        expect(retained?.sourceInputs?.map((input) => input.idempotencyKey)).toEqual(
-          mode === "mixed-live" ? ["B:user"] : b ? ["A:user", "B:user"] : ["A:user"],
-        );
-        expect(retained?.deliveries).toMatchObject([{ state: "prepared" }]);
-        expect(retained?.kind).toBe("replayable");
-        if (retained?.kind !== "replayable") {
-          throw new Error("Missing native notice intent");
+        const recorder = b
+          ? createUserTurnTranscriptRecorder({
+              target: { ...scope, sessionEntry: entry, config: cfg },
+              input: { text: "Collected A and B", idempotencyKey: "aggregate:user" },
+              pendingInputSources: [a, b],
+            })
+          : a;
+        if (b) {
+          recorders.push(recorder);
         }
-        expect(retained.text).toBe(result!.payload?.text);
-        if (mode === "staged-live") {
-          // The staged successor cannot safely resume. Its addressed notice still
-          // owns the exact original after cancellation, through actual settlement.
+        const followupRun: FollowupRun = {
+          prompt: "Synthetic R2 attempt",
+          enqueuedAt: 0,
+          userTurnTranscriptRecorder: recorder,
+          run: {
+            ...scope,
+            agentDir: state.agentDir(),
+            sessionFile: scope.storePath,
+            workspaceDir: state.workspaceDir,
+            config: cfg,
+            provider: "fixture",
+            model: "fixture",
+            timeoutMs: 1000,
+            blockReplyBreak: "message_end",
+          },
+        };
+        const turn = {
+          sessionKey: scope.sessionKey,
+          storePath: scope.storePath,
+          replyOperation: operation,
+          followupRun,
+          getActiveSessionEntry: () => entry,
+          sessionCtx: {
+            Provider: "whatsapp",
+            Surface: "whatsapp",
+            OriginatingChannel: "whatsapp",
+            OriginatingTo: "synthetic-source",
+            AccountId: "default",
+            ChatType: "direct" as const,
+            SessionKey: scope.sessionKey,
+          },
+        };
+        const context = resolveReplyRunDeliveryContext({
+          cfg,
+          sessionCtx: turn.sessionCtx,
+          sessionEntry: entry,
+          sessionKey: scope.sessionKey,
+        });
+        expect(context).toMatchObject({ channel: "whatsapp", to: "synthetic-source" });
+        const originals = await readUserTurnSourceInputs(recorder, assertCurrent);
+        expect(originals.map((input) => input.consumed)).toEqual(
+          b ? [true, false] : [mode === "live" || mode === "reservation"],
+        );
+        const readPending = () =>
+          withSessionActor(
+            scope,
+            { assertCurrent() {}, assertReadable() {} },
+            async (actor) =>
+              (await actor.read({ assertCurrent() {}, authorize() {} })).entry
+                ?.pendingFinalDelivery,
+          );
+        if (mode === "pending") {
+          await withAgentTurnCompletion(
+            { ...scope, entry, operation, recorder, publish() {} },
+            async (completion) => {
+              await completion!.complete({
+                kind: "replayable",
+                text: "Existing addressed notice",
+                sourceOutcome: "failure-notice",
+                intentId: "existing-intent",
+                sourceRunId: "existing-responder",
+                deliveries: [{ id: "existing-member", state: "prepared" }],
+                context,
+                createdAt: 1,
+              });
+            },
+          );
           await settlePendingFinalDelivery(
             {
               ...scope,
               kind: "pending-final",
-              intentId: expectDefined(retained.intentId, "native addressed notice identity"),
-              deliveryId: expectDefined(retained.deliveries?.[0], "native notice transport member")
-                .id,
+              intentId: "existing-intent",
+              deliveryId: "existing-member",
             },
-            "delivered",
-            undefined,
-            {
-              clearAfterSettled: true,
-              identifiedResult: {
-                channel: "whatsapp",
-                messageId: "notice-A",
-                target: { kind: "chat", id: "synthetic-source" },
-              },
-            },
+            "unknown",
           );
-          const store = await preparePendingInputStore(scope, () => {});
+        }
+        const successor = { ...followupRun, userTurnTranscriptRecorder: a };
+        recovery =
+          mode === "live" || mode === "mixed-live" || mode === "staged-live"
+            ? claimSessionControllerInput(successor)
+            : undefined;
+        reservation =
+          mode === "reservation"
+            ? submitSessionControllerInput(scope.sessionKey, successor, { mode: "followup" })
+            : undefined;
+        let result: Awaited<ReturnType<typeof prepareContinuityFailureNotice>>;
+        try {
           try {
-            const settlement = await store.read({
-              ...scope,
-              ...originals[0]!.identity!,
-              kind: "settlement",
-            });
-            expect(settlement).toMatchObject({
-              kind: "settlement",
-              current: true,
-              row: {
-                sourceDelivery: {
-                  kind: "failure-notice",
-                  responderRunId: "failed-attempt-R",
-                  platformMessageId: "notice-A",
+            throw new SessionTranscriptContinuityError(
+              "projection_read_fence",
+              "Deterministic native failure before remaining user consumption",
+            );
+          } catch (error) {
+            expect(error).toBeInstanceOf(SessionTranscriptContinuityError);
+            result = await prepareContinuityFailureNotice(turn, "failed-attempt-R", recorder);
+          }
+        } finally {
+          // These are the actual native chat terminal cleanup APIs, not a mocked disposition.
+          recorder.finishPendingInput!("cancelled");
+          await recorder.waitForPendingInputSettlement!();
+          operation.complete();
+        }
+        expect(isCurrentSessionControllerOperation(operation)).toBe(false);
+        if (recovery) {
+          const claim = await recovery;
+          const next = createReplyOperation({
+            ...scope,
+            resetTriggered: false,
+            mailboxClaim: claim,
+          });
+          try {
+            next.setPhase("running");
+            expect(isCurrentSessionControllerOperation(next)).toBe(true);
+            if (mode === "staged-live") {
+              // A runnable waiter is real, but it shares the original staged recorder.
+              // The failed owner's actual cleanup cancelled/released that custody.
+              await expect(a.persistApproved()).rejects.toThrow("Pending input ownership ended");
+              expect(a.getAdmissionReceipt()).toBeUndefined();
+              const fresh = make("A");
+              await expect(
+                fresh.stageApproved!({
+                  runId: "ingress-A",
+                  assertCurrent() {
+                    if (!isCurrentSessionControllerOperation(next)) {
+                      throw new Error("Successor lost custody");
+                    }
+                  },
+                }),
+              ).rejects.toThrow("Pending input ownership ended");
+              expect(fresh.getAdmissionReceipt()).toBeUndefined();
+              fresh.finishPendingInput!("cancelled");
+              await fresh.waitForPendingInputSettlement!();
+            } else {
+              const fresh = make("A");
+              await fresh.stageApproved!({
+                runId: "ingress-A",
+                assertCurrent() {
+                  if (!isCurrentSessionControllerOperation(next)) {
+                    throw new Error("Successor lost custody");
+                  }
+                },
+              });
+              await fresh.persistApproved();
+              expect(
+                (await readUserTurnSourceInputs(fresh, () => {})).map((input) => input.identity),
+              ).toEqual([originals[0]!.identity]);
+              expect(fresh.getAdmissionReceipt()).toBeDefined();
+              fresh.finishPendingInput!("cancelled");
+              await fresh.waitForPendingInputSettlement!();
+            }
+            // A real retained waiter became the actual successor after failed-owner cleanup.
+            expect(claim.sources).toEqual([successor]);
+          } finally {
+            next.complete();
+            releaseSessionControllerClaim(claim);
+            await claim.settlement.promise;
+          }
+        }
+        if (reservation) {
+          retireSessionControllerInput(reservation);
+          await reservation.settlement.promise;
+        }
+        const retained = await readPending();
+        if (mode === "live") {
+          expect(result!.disposition).toBe("recovering");
+          expect(retained).toBeUndefined();
+        } else if (mode === "pending") {
+          expect(result!.disposition).toBe("delivery-unknown");
+          expect(result!.payload).toBeUndefined();
+          expect(retained).toMatchObject({
+            intentId: "existing-intent",
+            deliveries: [{ state: "unknown" }],
+          });
+        } else {
+          expect(result!.disposition).toBe("saved-unanswered");
+          if (mode === "mixed-live") {
+            expect(result!.payload?.text).not.toContain("A accepted synthetic original");
+          } else {
+            expect(result!.payload?.text).toContain("A accepted synthetic original");
+          }
+          if (b) {
+            expect(result!.payload?.text).toContain("B accepted synthetic original");
+          }
+          expect(result!.payload?.text?.match(/I couldn't answer your/g)).toHaveLength(
+            b && mode !== "mixed-live" ? 2 : 1,
+          );
+          expect(retained?.sourceInputs?.map((input) => input.idempotencyKey)).toEqual(
+            mode === "mixed-live" ? ["B:user"] : b ? ["A:user", "B:user"] : ["A:user"],
+          );
+          expect(retained?.deliveries).toMatchObject([{ state: "prepared" }]);
+          expect(retained?.kind).toBe("replayable");
+          if (retained?.kind !== "replayable") {
+            throw new Error("Missing native notice intent");
+          }
+          expect(retained.text).toBe(result!.payload?.text);
+          if (mode === "staged-live") {
+            // The staged successor cannot safely resume. Its addressed notice still
+            // owns the exact original after cancellation, through actual settlement.
+            await settlePendingFinalDelivery(
+              {
+                ...scope,
+                kind: "pending-final",
+                intentId: expectDefined(retained.intentId, "native addressed notice identity"),
+                deliveryId: expectDefined(
+                  retained.deliveries?.[0],
+                  "native notice transport member",
+                ).id,
+              },
+              "delivered",
+              undefined,
+              {
+                clearAfterSettled: true,
+                identifiedResult: {
+                  channel: "whatsapp",
+                  messageId: "notice-A",
+                  target: { kind: "chat", id: "synthetic-source" },
                 },
               },
-            });
-          } finally {
-            await store.release();
+            );
+            const store = await preparePendingInputStore(scope, () => {});
+            try {
+              const settlement = await store.read({
+                ...scope,
+                ...originals[0]!.identity!,
+                kind: "settlement",
+              });
+              expect(settlement).toMatchObject({
+                kind: "settlement",
+                current: true,
+                row: {
+                  sourceDelivery: {
+                    kind: "failure-notice",
+                    responderRunId: "failed-attempt-R",
+                    platformMessageId: "notice-A",
+                  },
+                },
+              });
+            } finally {
+              await store.release();
+            }
+            expect(await readPending()).toBeUndefined();
           }
-          expect(await readPending()).toBeUndefined();
+        }
+      } finally {
+        // Setup and source reads can throw before the native terminal block.
+        // Release that case's source custody and reply slot before state teardown.
+        try {
+          for (const recorder of recorders) {
+            recorder.finishPendingInput!("cancelled");
+          }
+          await Promise.all(recorders.map((recorder) => recorder.waitForPendingInputSettlement!()));
+        } finally {
+          operation.complete();
+          // Notice preparation may fail before a retained waiter can execute or
+          // a reservation reaches its normal retirement block above.
+          if (recovery) {
+            const claim = await recovery;
+            releaseSessionControllerClaim(claim);
+            await claim.settlement.promise;
+          }
+          if (reservation) {
+            retireSessionControllerInput(reservation);
+            await reservation.settlement.promise;
+          }
         }
       }
     }),

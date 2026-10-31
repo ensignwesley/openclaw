@@ -1,5 +1,9 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/auto-reply/reply/agent-runner-continuity-lifecycle.test.ts",
+  "src/auto-reply/reply/agent-runner-continuity-writer.test.ts",
+  "src/sessions/user-turn-native-source-lifetime.test.ts",
+  "src/sessions/user-turn-source-delivery.test.ts",
   "src/gateway/server-methods.workshop-contract.test.ts",
   "src/cli/skills-cli.workshop-contract.test.ts",
   "src/auto-reply/reply/commands.workshop-contract.test.ts",
@@ -1421,6 +1425,9 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
+  ["src/auto-reply/reply/agent-runner-continuity-lifecycle.test.ts", "unitFast"],
+  ["src/auto-reply/reply/agent-runner-continuity-writer.test.ts", "unitFast"],
+  ["src/sessions/user-turn-source-delivery.test.ts", "unitFast"],
   ["src/commands/doctor/shared/xai-auto-retirement.test.ts", "unitFast"],
   ["src/agents/auth-profiles/session-override.model-endpoint.test.ts", "unitFast"],
   ["src/agents/harness/execution-environment.worker.test.ts", "unitFastIsolated"],

@@ -163,6 +163,7 @@ export async function handleAgentExecutionError(params: {
         turn,
         params.runId,
         params.state.inputRecorder,
+        params.state.sessionWriter,
       );
     } catch (error) {
       defaultRuntime.error(`Input source settlement deferred: ${formatErrorMessage(error)}`);

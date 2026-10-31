@@ -287,7 +287,6 @@ test("retains an addressed notice after a native staged input fails before consu
     });
     await withinTest(terminal.promise, context.signal);
     await withinTest(cleanup.promise, context.signal);
-    expect(cleanupRecords).toHaveLength(1);
     await fs.writeFile(
       path.join(evidence, "native-terminal-cleanup.json"),
       JSON.stringify(cleanupRecords, null, 2),
@@ -300,9 +299,6 @@ test("retains an addressed notice after a native staged input fails before consu
       path.join(evidence, "completion.json"),
       JSON.stringify({ accepted, settled, history, events, records }, null, 2),
     );
-    expect(records.filter((row) => row.kind === "admitted-user")).toHaveLength(1);
-    expect(transport).toHaveLength(0);
-    expect(JSON.stringify(history)).not.toContain("CONTINUITY-HEALTHY-OK");
     const addressed = events.filter((event) => {
       const payload = event.payload as { runId?: string; state?: string } | undefined;
       return (
@@ -312,9 +308,6 @@ test("retains an addressed notice after a native staged input fails before consu
         JSON.stringify(event).includes("I couldn't answer your")
       );
     });
-    expect(addressed).toHaveLength(1);
-    expect(JSON.stringify(addressed)).toContain("Summarize this synthetic report.");
-    expect(JSON.stringify(addressed).match(/I couldn't answer your/g)).toHaveLength(1);
     const sourceStore = await preparePendingInputStore(
       { agentId: "main", sessionKey, sessionId: history.sessionId },
       () => {},
@@ -330,6 +323,13 @@ test("retains an addressed notice after a native staged input fails before consu
         path.join(evidence, "source-settlement.json"),
         JSON.stringify(source, null, 2),
       );
+      expect(cleanupRecords).toHaveLength(1);
+      expect(records.filter((row) => row.kind === "admitted-user")).toHaveLength(1);
+      expect(transport).toHaveLength(0);
+      expect(JSON.stringify(history)).not.toContain("CONTINUITY-HEALTHY-OK");
+      expect(addressed).toHaveLength(1);
+      expect(JSON.stringify(addressed)).toContain("Summarize this synthetic report.");
+      expect(JSON.stringify(addressed).match(/I couldn't answer your/g)).toHaveLength(1);
       expect(source.kind).toBe("settlement");
       if (source.kind !== "settlement") {
         throw new Error("Wrong native source operation");

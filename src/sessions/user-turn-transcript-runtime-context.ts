@@ -31,6 +31,7 @@ const completionInputScope = new AsyncLocalStorage<{
   owner?: object;
   recorder?: UserTurnTranscriptRecorder;
   committedRecorders: Set<UserTurnTranscriptRecorder>;
+  sourceReleases: Map<UserTurnTranscriptRecorder, () => void>;
 }>();
 export function readCurrentUserTurnInputRecorder() {
   const scope = completionInputScope.getStore();
@@ -54,6 +55,12 @@ export function publishCommittedUserTurnInput(
     return;
   }
   if (recorder && getUserTurnTranscriptAdmissionOwner(recorder)) {
+    const retainSource = getUserTurnTranscriptAdmissionOwner(recorder)?.retainSource;
+    if (retainSource && !scope.sourceReleases.has(recorder)) {
+      // A steer finishes its input commit before this native execution finishes
+      // answering it. Keep the existing admission, never reopen ended custody.
+      scope.sourceReleases.set(recorder, retainSource());
+    }
     scope.recorder = recorder;
     scope.committedRecorders.add(recorder);
   } else if (
@@ -72,18 +79,34 @@ export async function withCurrentUserTurnInput<T>(
   const previous = completionInputScope.getStore();
   const scope =
     !previous || (owner && previous.owner !== owner)
-      ? { owner, recorder, committedRecorders: new Set(recorder ? [recorder] : []) }
+      ? {
+          owner,
+          recorder,
+          committedRecorders: new Set(recorder ? [recorder] : []),
+          // Final accounting runs after the nested execution scope. Its enclosing
+          // dispatcher owns source custody until all reconciliation is finished.
+          sourceReleases: previous?.sourceReleases ?? new Map(),
+        }
       : previous;
   const native = recorder && getUserTurnTranscriptAdmissionOwner(recorder);
   if (native) {
     native.committedInputs = scope.committedRecorders;
   }
   const enter = () => runWithAsyncStore(completionInputScope, scope, run);
-  return await (recorder?.withPendingInputCurrent
-    ? recorder.withPendingInputCurrent(enter)
-    : recorder?.withPendingInput
-      ? recorder.withPendingInput(enter)
-      : enter());
+  try {
+    return await (recorder?.withPendingInputCurrent
+      ? recorder.withPendingInputCurrent(enter)
+      : recorder?.withPendingInput
+        ? recorder.withPendingInput(enter)
+        : enter());
+  } finally {
+    if (!previous) {
+      for (const release of scope.sourceReleases.values()) {
+        release();
+      }
+      scope.sourceReleases.clear();
+    }
+  }
 }
 
 export function bindUserTurnInput(

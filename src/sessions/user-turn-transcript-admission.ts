@@ -24,6 +24,8 @@ export type UserTurnPromptReactionSource = Readonly<{
 }>;
 
 type AdmissionOwner = {
+  /** Keep source settlement custody through the native dispatcher, not just input commit. */
+  retainSource?: () => () => void;
   sources?: readonly UserTurnTranscriptRecorder[];
   committedInputs?: Set<UserTurnTranscriptRecorder>;
   ensureSource?: (assertCurrent: () => void) => Promise<SessionPendingInputReceipt | undefined>;

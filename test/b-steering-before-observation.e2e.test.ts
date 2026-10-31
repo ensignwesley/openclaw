@@ -315,23 +315,6 @@ test("retains distinct A and B receipts when native steering commits B final bef
         2,
       ),
     );
-    expect(steeringCalls).toHaveLength(1);
-    expect(requestCount).toBe(2);
-    expect(records.filter((row) => row.kind === "admitted-user")).toHaveLength(2);
-    expect(records.filter((row) => row.kind === "native-final-committed")).toHaveLength(2);
-    expect(JSON.stringify(history)).toContain("NATIVE-A-ANSWER");
-    expect(JSON.stringify(history)).toContain("NATIVE-B-ANSWER");
-    expect(transport).toHaveLength(2);
-    expect(transport[1]!.request).toContain("B: answer this distinct steered synthetic request.");
-    const errors = events.filter((event) => {
-      const payload = event.payload as
-        | { state?: string; suppressErrorNotice?: boolean }
-        | undefined;
-      return (
-        event.event === "chat" && payload?.state === "error" && payload.suppressErrorNotice !== true
-      );
-    });
-    expect(errors).toHaveLength(0);
     // Silence alone could pass while durable original-input receipt custody stays broken.
     const sourceStore = await preparePendingInputStore(
       { agentId: "main", sessionKey, sessionId: history.sessionId },
@@ -343,18 +326,46 @@ test("retains distinct A and B receipts when native steering commits B final bef
         "synthetic-native-steering-B:user",
       ];
       const receipts = [];
-      for (const [index, idempotencyKey] of identities.entries()) {
+      for (const idempotencyKey of identities) {
         const source = await sourceStore.read({
           kind: "settlement",
           sessionKey,
           sessionId: history.sessionId,
           idempotencyKey,
         });
+        receipts.push(source);
+      }
+      await fs.writeFile(
+        path.join(destination, "source-settlement.json"),
+        JSON.stringify(receipts, null, 2),
+      );
+      expect(steeringCalls).toHaveLength(1);
+      expect(requestCount).toBe(2);
+      expect(records.filter((row) => row.kind === "admitted-user")).toHaveLength(2);
+      expect(records.filter((row) => row.kind === "native-final-committed")).toHaveLength(2);
+      expect(JSON.stringify(history)).toContain("NATIVE-A-ANSWER");
+      expect(JSON.stringify(history)).toContain("NATIVE-B-ANSWER");
+      expect(transport).toHaveLength(2);
+      expect(transport[1]!.request).toContain("B: answer this distinct steered synthetic request.");
+      const errors = events.filter((event) => {
+        const payload = event.payload as
+          | { state?: string; suppressErrorNotice?: boolean }
+          | undefined;
+        return (
+          event.event === "chat" &&
+          payload?.state === "error" &&
+          payload.suppressErrorNotice !== true
+        );
+      });
+      expect(errors).toHaveLength(0);
+      const settlements = receipts.map((source) => {
         expect(source.kind).toBe("settlement");
         if (source.kind !== "settlement") {
           throw new Error("Native source settlement returned another operation");
         }
-        receipts.push(source);
+        return source;
+      });
+      for (const [index, source] of settlements.entries()) {
         const marker = index === 0 ? "NATIVE-A-ANSWER" : "NATIVE-B-ANSWER";
         const final = records.find(
           (row) =>
@@ -367,12 +378,8 @@ test("retains distinct A and B receipts when native steering commits B final bef
           platformMessageId: final!.entryId,
         });
       }
-      await fs.writeFile(
-        path.join(destination, "source-settlement.json"),
-        JSON.stringify(receipts, null, 2),
-      );
-      expect(receipts[0]!.row?.sourceDelivery?.platformMessageId).not.toBe(
-        receipts[1]!.row?.sourceDelivery?.platformMessageId,
+      expect(settlements[0]!.row?.sourceDelivery?.platformMessageId).not.toBe(
+        settlements[1]!.row?.sourceDelivery?.platformMessageId,
       );
     } finally {
       await sourceStore.release();

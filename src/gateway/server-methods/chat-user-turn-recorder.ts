@@ -19,6 +19,7 @@ import {
 } from "../../infra/diagnostics-timeline.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { getRpcSourceIdentity } from "../../sessions/session-controller.rpc-sources.js";
+import { getUserTurnTranscriptAdmissionOwner } from "../../sessions/user-turn-transcript-admission.js";
 import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
@@ -375,6 +376,8 @@ export function createGatewayChatUserTurnController(params: {
         }
       : {}),
   });
+  getUserTurnTranscriptAdmissionOwner(recorder)!.retainSource =
+    admission.retainGatewayWorkAdmission;
   bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: admission.acquireInputActor });
   const persist: GatewayChatUserTurnController["persist"] = async (options) => {
     if (options?.contextFreeCommand === true && !recorder.hasPersisted()) {
