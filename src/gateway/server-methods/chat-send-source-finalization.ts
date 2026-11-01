@@ -1,12 +1,16 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   isHostNoticePayload,
   isReplyPayloadStatusNotice,
+  type ReplyPayload,
+  type SessionWriterDeliveryAuthority,
 } from "../../auto-reply/reply-payload.js";
 import type { QueuedFollowupReplyBatch } from "../../auto-reply/reply/queue/types.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { captureChatAbortRegistrationGuard } from "../chat-abort-lifecycle-internal.js";
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
@@ -37,6 +41,7 @@ import {
   createChatSendReplyFinalizationAuthority,
   type ChatSendReplyFinalizationParams,
 } from "./chat-send-delivery-authority.js";
+import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import {
   assistantTranscriptScope,
   publishAssistantTranscriptRewrite,
@@ -47,6 +52,16 @@ import {
 } from "./chat-transcript-persistence.js";
 import { readCommittedSourceReplyContent } from "./chat-transcript-source-reply-owner.js";
 
+/** A failed native turn cannot stream the host's separately retained resend notice. */
+function isPendingInputFailureNotice(payload: ReplyPayload) {
+  const metadata = getReplyPayloadMetadata(payload);
+  return (
+    payload.isError === true &&
+    metadata?.hostNotice === true &&
+    metadata.pendingFinalDeliveryCompletion !== undefined
+  );
+}
+
 function selectChatSendAgentReplyInputs(params: {
   deliveredReplies: readonly DeliveredChatSendReply[];
   hasReturnedAgentErrorPayloads: boolean;
@@ -54,6 +69,9 @@ function selectChatSendAgentReplyInputs(params: {
   return params.deliveredReplies
     .filter((entry) => {
       const payload = readChatSendReplyPayload(entry.input);
+      if (isPendingInputFailureNotice(payload)) {
+        return entry.kind === "final";
+      }
       return getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority ||
         isSourceReplyTranscriptMirrorPayload(payload)
         ? entry.kind === "final" && payload.isError !== true
@@ -460,7 +478,7 @@ async function finalizeChatSendAgentReplyPayloads(
     const sourceReplyTextFromContent = extractAssistantDisplayText(sourceReplyContent);
     const sourceReplyText =
       sourceReplyTextFromContent ?? (sourceReplyContent.length === 0 ? displayReply : undefined);
-    const message =
+    let message: Record<string, unknown> | undefined =
       sourceReplyContent.length || sourceReplyText
         ? {
             role: "assistant",
@@ -473,8 +491,63 @@ async function finalizeChatSendAgentReplyPayloads(
             usage: { input: 0, output: 0, totalTokens: 0 },
           }
         : undefined;
-    // Failed turns retain source media/transcript finalization; chat.error carries no message.
-    if (!params.suppressFinal) {
+    // Native failure diagnostics are separate from the host-authored notice owed to
+    // the exact input. Capture is not delivery: retain unknown custody until this
+    // owner commits and publishes the notice.
+    const inputFailureNotice = agentRunReplyPayloads.every(isPendingInputFailureNotice);
+    const noticeReceipts: Array<{
+      completion: NonNullable<
+        NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["pendingFinalDeliveryCompletion"]
+      > & { sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority };
+      messageId: string;
+    }> = [];
+    if (inputFailureNotice) {
+      for (const [index, payload] of agentRunReplyPayloads.entries()) {
+        const completion = getReplyPayloadMetadata(payload)!.pendingFinalDeliveryCompletion!;
+        if (completion.sessionKey !== sessionKey || completion.sessionId !== sessionId) {
+          return { kind: "dropped", reason: "no-visible-content" };
+        }
+        const appended = await appendInjectedAssistantMessageToTranscript({
+          sessionKey,
+          sessionId,
+          storePath: latestStorePath,
+          agentId,
+          message: payload.text ?? "",
+          content: sourceReplyContentStates[index]?.persistedContent,
+          idempotencyKey: `${completion.intentId}:${completion.deliveryId}`,
+          runId: clientRunId,
+          config: context.getRuntimeConfig(),
+          expectedSessionId: completion.sessionId,
+          expectedLifecycleRevision: latestEntry?.lifecycleRevision ?? null,
+          assertCurrent: mediaScope.assertCurrent,
+          literal: true,
+        });
+        if (!appended.ok || !appended.messageId) {
+          throw new Error(`Input failure notice was not persisted: ${appended.error}`);
+        }
+        // session.message and chat.final project the same committed occurrence.
+        // Retain the row identity instead of publishing a second unkeyed notice.
+        message = {
+          ...appended.message,
+          __openclaw: {
+            ...asOptionalRecord(appended.message?.["__openclaw"]),
+            id: appended.messageId,
+            runId: clientRunId,
+          },
+        };
+        noticeReceipts.push({
+          completion: {
+            ...completion,
+            sessionWriterDeliveryAuthority:
+              getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority,
+          },
+          messageId: appended.messageId,
+        });
+      }
+    }
+    // Failed turns retain source media/transcript finalization; only a separately
+    // retained host notice may publish in addition to the diagnostic chat.error.
+    if (!params.suppressFinal || inputFailureNotice) {
       if (!authorizeDelivery("broadcast")) {
         return { kind: "dropped", reason: "no-visible-content" };
       }
@@ -493,6 +566,24 @@ async function finalizeChatSendAgentReplyPayloads(
           message,
         });
       }
+    }
+    for (const { completion, messageId } of noticeReceipts) {
+      if (!authorizeDelivery("notice settlement")) {
+        return { kind: "dropped", reason: "no-visible-content" };
+      }
+      await settlePendingFinalDelivery(
+        { kind: "pending-final", ...completion },
+        "delivered",
+        ["prepared", "queued", "unknown"],
+        {
+          identifiedResult: {
+            channel: "webchat",
+            messageId,
+            target: { kind: "chat", id: sessionKey },
+          },
+          clearAfterSettled: true,
+        },
+      );
     }
     return { kind: "delivered", hasSourceReplyTranscriptMirror };
   } catch (error) {

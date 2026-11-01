@@ -7,7 +7,12 @@ import {
   replaceSessionEntry,
   patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { appendInjectedAssistantMessageToTranscript } from "../../gateway/server-methods/chat-transcript-inject.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
+import {
+  onSessionTranscriptUpdate,
+  type SessionTranscriptUpdate,
+} from "../../sessions/transcript-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareContinuityFailureNotice } from "./agent-runner-continuity-notice.js";
@@ -15,7 +20,7 @@ import type { FollowupRun } from "./queue/types.js";
 
 afterEach(resetConfigRuntimeState);
 
-it.each(["current", "replaced"] as const)(
+it.each(["current", "replaced", "excerpt"] as const)(
   "uses the native settled writer with a stale ingress entry, preserving %s writer fencing",
   (mode) =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -39,7 +44,10 @@ it.each(["current", "replaced"] as const)(
       const recorder = createUserTurnTranscriptRecorder({
         target: { ...scope, sessionEntry: entry, config: cfg },
         input: {
-          text: "Synthetic unanswered original",
+          text:
+            mode === "excerpt"
+              ? "Synthetic unanswered original.\n*literal* [link](https://example.test/a)."
+              : "Synthetic unanswered original",
           timestamp: 1000,
           idempotencyKey: "native-writer:user",
         },
@@ -99,6 +107,42 @@ it.each(["current", "replaced"] as const)(
           const result = await notice;
           expect(result.disposition).toBe("saved-unanswered");
           expect(result.payload?.text).toContain("Synthetic unanswered original");
+          if (mode === "current") {
+            const updates: SessionTranscriptUpdate[] = [];
+            const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+            try {
+              const params = {
+                ...scope,
+                message: result.payload!.text!,
+                runId: "native-run",
+                idempotencyKey: "native-notice:publication",
+                literal: true as const,
+                config: cfg,
+              };
+              const first = await appendInjectedAssistantMessageToTranscript(params);
+              const replay = await appendInjectedAssistantMessageToTranscript(params);
+              expect(first.ok).toBe(true);
+              expect(first.messageId).toBeTruthy();
+              expect(replay.messageId).toBe(first.messageId);
+              expect(replay.replayed).toBe(true);
+              expect(updates.filter((update) => update.messageId === first.messageId)).toHaveLength(
+                1,
+              );
+              expect(updates.find((update) => update.messageId === first.messageId)).toMatchObject({
+                runId: "native-run",
+                message: { __openclaw: { runId: "native-run" } },
+              });
+            } finally {
+              unsubscribe();
+            }
+          }
+          if (mode === "excerpt") {
+            expect(result.payload?.text).toContain("Synthetic unanswered original.");
+            expect(result.payload?.text).toContain(
+              String.raw`\*literal\* \[link\]\(https\:\/\/example.test\/a\).`,
+            );
+            expect(result.payload?.text).not.toContain("\n");
+          }
         }
       } finally {
         recorder.finishPendingInput!("cancelled");

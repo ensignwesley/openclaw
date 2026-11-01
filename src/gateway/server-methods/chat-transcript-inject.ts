@@ -69,6 +69,8 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
+  /** Native producer owning this injected terminal publication. */
+  runId?: string;
   stopReason?: "stop" | "aborted";
   /** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
   abortMeta?: {
@@ -192,7 +194,9 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       expectedLifecycleRevision: params.expectedLifecycleRevision,
       updateMode: "inline",
       onMessageCommitted: params.onMessageCommitted,
-      ...(params.abortMeta ? { runId: params.abortMeta.runId } : {}),
+      ...((params.abortMeta?.runId ?? params.runId)
+        ? { runId: params.abortMeta?.runId ?? params.runId }
+        : {}),
       touchSessionEntry: true,
       ...(params.config ? { config: params.config } : {}),
       messages: [

@@ -165,9 +165,12 @@ export async function prepareContinuityFailureNotice(
               : message.content
                   .flatMap((part) => (part.type === "text" ? [part.text] : []))
                   .join(" ");
+          // The excerpt is quoted mid-line after whitespace normalization, so a
+          // period cannot start a Markdown list. Preserve ordinary punctuation in
+          // chat/history while still escaping links, emphasis, and HTML.
           const excerpt = escapeMarkdownText(
             [...raw.replace(/[\p{C}\s]+/gu, " ").trim()].slice(0, 120).join(""),
-          );
+          ).replace(/\\\./g, ".");
           const time = Number.isFinite(message.timestamp)
             ? new Intl.DateTimeFormat("en-GB", {
                 hour: "2-digit",
@@ -202,6 +205,15 @@ export async function prepareContinuityFailureNotice(
           { text, isError: true },
           {
             deliverDespiteSourceReplySuppression: true,
+            hostNotice: true,
+            sessionWriterDeliveryAuthority: {
+              agentId: turn.followupRun.run.agentId,
+              sessionKey,
+              storePath,
+              expectedSessionId: entry.sessionId,
+              expectedLifecycleRevision: entry.lifecycleRevision,
+              expectedWriterRunId: entry.activeWriterRunId,
+            },
             pendingFinalDeliveryCompletion: {
               agentId: turn.followupRun.run.agentId,
               sessionKey,
