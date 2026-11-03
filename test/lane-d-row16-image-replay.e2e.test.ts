@@ -199,6 +199,12 @@ test("human path images survive a cold replay without losing attachment or files
   const authoredPath = path.join(gateway.state.workspaceDir, "diagram.png");
   const outsidePath = path.join(gateway.homeDir, "outside-row16.png");
   await fs.mkdir(gateway.state.workspaceDir, { recursive: true });
+  // Keep the workspace attested when the image is removed later; deleting the
+  // sole content file would exercise WORKSPACE_VANISHED, not image durability.
+  await fs.writeFile(
+    path.join(gateway.state.workspaceDir, "notes.txt"),
+    "Row16 workspace control.\n",
+  );
   await fs.writeFile(authoredPath, Buffer.from(PNG, "base64"));
   await fs.writeFile(outsidePath, Buffer.from(PNG, "base64"));
   const connect = async () => {
@@ -305,20 +311,10 @@ test("human path images survive a cold replay without losing attachment or files
     await turn(attachmentSession, "ROW16_EXPLICIT_FOLLOWUP: Continue."),
     attachmentText,
   );
-  // A repaired admission must also retain the already-sent bytes after the
-  // workspace reference disappears, rather than rediscovering history paths.
-  await fs.unlink(authoredPath);
-  summary.originalPathDeleted = true;
-  const replayAfterDelete = authored(
-    await turn(humanSession, "ROW16_AFTER_DELETE: Continue without new attachments."),
-    humanText,
-  );
-  summary.historyAfter = await rpc("chat.history", { sessionKey: humanSession, limit: 10 });
   Object.assign(summary, {
-    phase: "product-assertions",
+    phase: "primary-product-assertions",
     initial,
     replay,
-    replayAfterDelete,
     explicit,
     explicitReplay,
     denied,
@@ -326,13 +322,12 @@ test("human path images survive a cold replay without losing attachment or files
     replayImages: imageBlocks(replay).length,
     initialSha256: digest(initial),
     replaySha256: digest(replay),
-    replayAfterDeleteSha256: digest(replayAfterDelete),
     explicitSha256: digest(explicit),
     explicitReplaySha256: digest(explicitReplay),
   });
   // Positive and denial controls must pass before interpreting the intended RED.
-  expect(requests).toHaveLength(6);
-  expect(responses).toHaveLength(6);
+  expect(requests).toHaveLength(5);
+  expect(responses).toHaveLength(5);
   expect(summary.sourcePresentOnColdReplay).toBe(true);
   expect(imageBlocks(initial)).toHaveLength(1);
   expect(imageBlocks(explicit)).toHaveLength(1);
@@ -340,12 +335,16 @@ test("human path images survive a cold replay without losing attachment or files
   expect(imageBlocks(explicitReplay)).toEqual(imageBlocks(explicit));
   expect(imageBlocks(denied), "workspace-only policy denies a real outside PNG").toHaveLength(0);
   summary.controls = "passed";
-  summary.verdict =
-    imageBlocks(replay).length === 1 &&
-    digest(initial) === digest(replay) &&
-    digest(imageBlocks(initial)) === digest(imageBlocks(replayAfterDelete))
+  summary.primaryVerdict =
+    imageBlocks(replay).length === 1 && digest(initial) === digest(replay)
       ? "contract-green"
       : "contract-red";
+  // Persist the reached primary checkpoint before a distinct source-deletion
+  // scenario. A later setup/control failure cannot erase this narrower result.
+  await fs.writeFile(
+    path.join(evidence, "primary-checkpoint.json"),
+    JSON.stringify(summary, null, 2),
+  );
   expect(
     imageBlocks(replay),
     "ROW16: cold replay must retain the admitted human image",
@@ -353,8 +352,24 @@ test("human path images survive a cold replay without losing attachment or files
   expect(replay, "ROW16: previously sent authored provider item stays byte-identical").toEqual(
     initial,
   );
+  // A repaired admission must retain already-sent bytes after the reference
+  // disappears, rather than rediscovering mutable history paths.
+  summary.phase = "source-deletion";
+  await fs.unlink(authoredPath);
+  summary.originalPathDeleted = true;
+  const replayAfterDelete = authored(
+    await turn(humanSession, "ROW16_AFTER_DELETE: Continue without new attachments."),
+    humanText,
+  );
+  summary.historyAfter = await rpc("chat.history", { sessionKey: humanSession, limit: 10 });
+  summary.replayAfterDelete = replayAfterDelete;
+  summary.replayAfterDeleteSha256 = digest(replayAfterDelete);
+  expect(requests).toHaveLength(6);
+  expect(responses).toHaveLength(6);
   expect(
     imageBlocks(replayAfterDelete),
     "ROW16: admitted bytes survive original path deletion",
   ).toEqual(imageBlocks(initial));
+  summary.phase = "complete";
+  summary.verdict = "contract-green";
 }, 600_000);
