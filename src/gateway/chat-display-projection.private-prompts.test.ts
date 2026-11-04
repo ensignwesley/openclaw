@@ -7,13 +7,18 @@ it.each(["history", "live", "delta"] as const)(
   (surface) => {
     const text = "Continue reviewing the patch.";
     const guidance = "Advisor guidance for the model only: check the rollback path.";
+    const imageData = "cHJpdmF0ZS1wcm9tcHQtaW1hZ2U=";
     const message = {
       role: "user",
       content: text,
       timestamp: 1,
       __openclaw: {
         runId: "next-turn-run",
-        modelPromptProjection: { version: 1, text: `${guidance}\n\n${text}` },
+        modelPromptProjection: {
+          version: 1,
+          text: `${guidance}\n\n${text}`,
+          images: [{ index: 0, image: { type: "image", data: imageData, mimeType: "image/png" } }],
+        },
       },
     };
     const canonical = structuredClone(message);
@@ -28,6 +33,7 @@ it.each(["history", "live", "delta"] as const)(
 
     expect(display).not.toHaveProperty(["__openclaw", "modelPromptProjection"]);
     expect(JSON.stringify(display)).not.toContain(guidance);
+    expect(JSON.stringify(display)).not.toContain(imageData);
     expect(display).toMatchObject({
       role: "user",
       content: text,

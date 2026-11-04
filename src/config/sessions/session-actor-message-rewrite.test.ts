@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { ModelPromptImage } from "../../sessions/user-turn-transcript.types.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import {
@@ -131,7 +132,7 @@ it("rejects a missing anchor in the current resident facts", () =>
     expect(rewrite.rows().at(-1)?.eventJson).toBe(rewrite.eventJson);
   }));
 
-function promptCarrier(f: Fixture, text: string) {
+function promptCarrier(f: Fixture, text: string, images?: ModelPromptImage[]) {
   const rewrite = fixture(f);
   const before = f.read();
   const carrier = {
@@ -152,7 +153,11 @@ function promptCarrier(f: Fixture, text: string) {
       phaseId: "turn",
       append: {
         kind: "metadata",
-        modelPromptProjection: { anchor: rewrite.selection.target.anchor, text },
+        modelPromptProjection: {
+          anchor: rewrite.selection.target.anchor,
+          text,
+          ...(images ? { images } : {}),
+        },
         input: {
           scope: f.scope,
           event: JSON.stringify(carrier),
@@ -166,11 +171,18 @@ function promptCarrier(f: Fixture, text: string) {
 }
 
 it.each([
-  { text: "Original question", lostResponse: false },
-  { text: "Final transformed question", lostResponse: true },
-])("commits prompt capture and its carrier together ($text)", ({ text, lostResponse }) =>
+  { text: "Original question", lostResponse: false, images: undefined },
+  { text: "Final transformed question", lostResponse: true, images: undefined },
+  {
+    text: "Original question",
+    lostResponse: true,
+    images: [
+      { index: 0, image: { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" } },
+    ],
+  },
+])("commits prompt capture and its carrier together ($text)", ({ text, lostResponse, images }) =>
   withActor(async (f) => {
-    const { rewrite, before, carrier, command } = promptCarrier(f, text);
+    const { rewrite, before, carrier, command } = promptCarrier(f, text, images);
     await f.prepare(command);
     if (lostResponse) {
       f.hooks.afterTransaction = () => {
@@ -182,12 +194,12 @@ it.each([
     assert(outcome.kind === "committed");
     const projected = {
       ...message,
-      __openclaw: { modelPromptProjection: { version: 1, text } },
+      __openclaw: { modelPromptProjection: { version: 1, text, ...(images ? { images } : {}) } },
     };
     const expectedEvents = [rewrite.header, { ...question, message: projected }, carrier];
     expect(
       outcome.receipt.transcript.after.generation === before.transcript.version.generation,
-    ).toBe(text === message.content);
+    ).toBe(text === message.content && !images);
     if (lostResponse) {
       expect(outcome.failure?.message).toBe("synthetic lost response after commit");
     }

@@ -7,6 +7,7 @@ import {
   isUserMessage,
   prepareModelPromptProjection,
   readModelPromptProjection,
+  readModelPromptImages,
 } from "./user-turn-transcript.message.js";
 import {
   normalizePersistedSteerTargetRunId,
@@ -14,6 +15,7 @@ import {
 } from "./user-turn-transcript.metadata.js";
 import type {
   PersistedUserTurnMessage,
+  ModelPromptImage,
   PreparedModelPromptProjection,
   UserTurnTranscriptAdmissionReceipt,
 } from "./user-turn-transcript.types.js";
@@ -55,6 +57,7 @@ type ModelPromptProjectionParams = {
   admission: UserTurnTranscriptAdmissionReceipt;
   message: PersistedUserTurnMessage;
   text: string;
+  images?: ModelPromptImage[];
   assertCurrent: () => void;
   assertWritable: () => void;
   onCommitted: (
@@ -66,13 +69,20 @@ type ModelPromptProjectionParams = {
 export function preparePersistedModelPromptProjection(
   params: ModelPromptProjectionParams,
 ): PreparedModelPromptProjection | undefined {
-  if (readModelPromptProjection(params.message) !== undefined) {
+  if (
+    readModelPromptProjection(params.message) !== undefined &&
+    (params.images === undefined || readModelPromptImages(params.message) !== undefined)
+  ) {
     prepareModelPromptProjection(params.message, params.text);
     return undefined;
   }
   params.assertWritable();
   return {
-    intent: { anchor: params.admission, text: params.text },
+    intent: {
+      anchor: params.admission,
+      text: params.text,
+      ...(params.images !== undefined ? { images: params.images } : {}),
+    },
     async onCommitted(rewritten) {
       if (!rewritten || !isUserMessage(rewritten.message)) {
         throw new Error("Model prompt projection lost its canonical user turn");
@@ -102,6 +112,7 @@ export async function capturePersistedModelPromptProjection(
     prepared.intent.anchor,
     prepared.intent.text,
     params.assertWritable,
+    prepared.intent.images,
   );
   const message = await prepared.onCommitted(rewritten);
   params.assertCurrent();

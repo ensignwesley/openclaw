@@ -58,10 +58,10 @@ import {
 } from "../session-prompt-state.js";
 import {
   installRuntimeContextMessageForPrompt,
-  installModelPromptProjection,
   normalizeMessagesForLlmBoundary,
 } from "./attempt-llm-boundary.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
+import { installModelPromptProjection } from "./model-prompt-projection.js";
 import {
   attachSteeringRuntimeContext,
   buildRuntimeContextCustomMessage,

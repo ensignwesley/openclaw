@@ -1,6 +1,5 @@
 import type { KeyId } from "@earendil-works/pi-tui";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { cloneTranscriptView } from "../../../config/sessions/transcript-snapshot.js";
 import type { ImageContent, Model } from "../../../llm/types.js";
 import { registerListener } from "../../../shared/listeners.js";
 import { rethrowIncognitoSessionError } from "../../../state/incognito-session-error.js";
@@ -13,6 +12,7 @@ import { SessionMetadataCommittedError } from "../session-manager-metadata-error
 import type { SessionManager } from "../session-manager.js";
 import { warnSessionPersistenceDeprecation } from "../session-persistence-deprecation.js";
 import type { BuildSystemPromptOptions } from "../system-prompt-metadata.js";
+import { cloneExtensionContextMessages } from "./context-messages.js";
 import {
   bindExtensionMetadataActions,
   bindExtensionPersistenceActions,
@@ -697,7 +697,7 @@ export class ExtensionRunner {
     if (!this.hasHandlers("context")) {
       return messages;
     }
-    let currentMessages = cloneTranscriptView(messages, { shareImmutablePayloads: false });
+    let currentMessages = cloneExtensionContextMessages(messages);
 
     await this.dispatchHandlers("context", async (handler, ctx) => {
       const event: ContextEvent = { type: "context", messages: currentMessages };

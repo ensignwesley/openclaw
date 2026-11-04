@@ -460,6 +460,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
       foreignInputs?.omitInput(messages) ?? messages,
       {
         ...buildBoundaryOptions(),
+        projectModelPromptImages: false,
         onRuntimeContextCarrierRemoved: (removed) => {
           removedRuntimeContext = removed;
         },

@@ -8,20 +8,50 @@ import {
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import type { RequesterOrigin } from "../agents/requester-origin.js";
 import {
   isMediaKind,
+  isImageMediaFact,
+  attachRuntimePromptMediaFacts,
+  readRuntimePromptMediaFacts,
   readPersistedMediaFacts,
   type MediaFact,
   type MediaFactInput,
 } from "../media/media-facts.js";
+import {
+  finalizeRuntimePromptImages,
+  readRuntimePromptImageFactIndex,
+} from "../media/runtime-prompt-image-provenance.js";
 import { applyInputProvenanceToUserMessage } from "./input-provenance.js";
 import { buildPersistedUserTurnMetadata } from "./user-turn-transcript.metadata.js";
 import type {
+  ModelPromptImage,
   PersistedUserTurnMediaInput,
   PersistedUserTurnMessage,
   UserTurnInput,
   UserTurnMessagePersistenceParams,
 } from "./user-turn-transcript.types.js";
+
+// Exposed messages are projections. Only producer facts or exact accepted
+// pending custody can supply identity to a fresh write.
+export function projectUserTurnRequesterOrigin<T extends PersistedUserTurnMessage | undefined>(
+  candidate: T,
+  origin: RequesterOrigin | undefined,
+): T {
+  if (!candidate) {
+    return candidate;
+  }
+  const { requesterOrigin: _previousOrigin, ...metadata } = candidate["__openclaw"] ?? {};
+  if (origin) {
+    metadata.requesterOrigin = origin;
+  }
+  const next = { ...candidate };
+  delete next["__openclaw"];
+  if (Object.keys(metadata).length > 0) {
+    next["__openclaw"] = metadata;
+  }
+  return next;
+}
 
 const URL_LIKE_MEDIA_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:/i;
 const MIME_TYPE_PATTERN = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/iu;
@@ -128,7 +158,38 @@ function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown>
   return asOptionalRecord(Reflect.get(message, "__openclaw"));
 }
 
-export function readModelPromptProjection(message: unknown): string | undefined {
+function isModelPromptImages(value: unknown): value is ModelPromptImage[] {
+  if (!Array.isArray(value)) return false;
+  let previousIndex = -1;
+  return value.every((entry) => {
+    const slot = asOptionalRecord(entry);
+    const image = asOptionalRecord(slot?.image);
+    if (
+      typeof slot?.index !== "number" ||
+      !Number.isSafeInteger(slot.index) ||
+      slot.index <= previousIndex
+    )
+      return false;
+    const valid = image
+      ? slot.factIndex === undefined &&
+        image.type === "image" &&
+        typeof image.data === "string" &&
+        typeof image.mimeType === "string"
+      : slot.image === undefined &&
+        typeof slot.factIndex === "number" &&
+        Number.isSafeInteger(slot.factIndex) &&
+        slot.factIndex >= 0;
+    previousIndex = slot.index;
+    return valid;
+  });
+}
+
+function readModelPromptProjectionPayload(message: unknown):
+  | {
+      text: string;
+      images?: ModelPromptImage[];
+    }
+  | undefined {
   if (!isUserMessage(message)) {
     return undefined;
   }
@@ -137,17 +198,31 @@ export function readModelPromptProjection(message: unknown): string | undefined 
     return undefined;
   }
   const projection = asOptionalRecord(metadata.modelPromptProjection);
-  if (projection?.version !== 1 || typeof projection.text !== "string") {
+  const images = projection?.images;
+  if (
+    projection?.version !== 1 ||
+    typeof projection.text !== "string" ||
+    (images !== undefined && !isModelPromptImages(images))
+  ) {
     throw new Error(
       "Unsupported or invalid user-turn model prompt projection; update OpenClaw to a compatible version or start a new session.",
     );
   }
-  return projection.text;
+  return { text: projection.text, ...(images ? { images } : {}) };
+}
+
+export function readModelPromptProjection(message: unknown): string | undefined {
+  return readModelPromptProjectionPayload(message)?.text;
+}
+
+export function readModelPromptImages(message: unknown): ModelPromptImage[] | undefined {
+  return readModelPromptProjectionPayload(message)?.images;
 }
 
 export function prepareModelPromptProjection(
   message: unknown,
   text: string,
+  images?: ModelPromptImage[],
 ): PersistedUserTurnMessage | undefined {
   if (!isUserMessage(message)) {
     throw new Error("Model prompt projection lost its canonical user turn");
@@ -157,36 +232,104 @@ export function prepareModelPromptProjection(
     if (existing !== text) {
       throw new Error("A captured user-turn model prompt projection cannot be changed");
     }
-    return undefined;
+    if (images === undefined || readModelPromptImages(message) !== undefined) return undefined;
   }
   return {
     ...message,
     __openclaw: {
       ...message["__openclaw"],
-      modelPromptProjection: { version: 1, text },
+      modelPromptProjection: { version: 1, text, ...(images !== undefined ? { images } : {}) },
     },
   };
+}
+
+/** Materialize frozen image choices before extension context hooks; never after redaction. */
+export function projectRecordedModelPromptImages(
+  message: PersistedUserTurnMessage,
+  transcript?: AgentMessage,
+): PersistedUserTurnMessage;
+export function projectRecordedModelPromptImages(
+  message: AgentMessage,
+  transcript?: AgentMessage,
+): AgentMessage;
+export function projectRecordedModelPromptImages(
+  message: AgentMessage,
+  transcript?: AgentMessage,
+): AgentMessage {
+  if (!isUserMessage(message)) return message;
+  const slots = readModelPromptImages(transcript) ?? readModelPromptImages(message);
+  if (slots === undefined) return message;
+  const facts = readRuntimePromptMediaFacts(message) ?? readPersistedMediaFacts(message) ?? [];
+  const selected = new Set(
+    slots.flatMap((slot) => (slot.factIndex !== undefined ? [slot.factIndex] : [])),
+  );
+  const blocks = Array.isArray(message.content)
+    ? message.content
+    : [{ type: "text" as const, text: message.content }];
+  if (
+    !slots.length &&
+    !blocks.some((block) => block.type === "image") &&
+    !facts.some(isImageMediaFact)
+  )
+    return message;
+  const indexes = asOptionalRecord(message["__openclaw"])?.mediaImageBlockFactIndexes;
+  const managed = new Map<number, Extract<(typeof blocks)[number], { type: "image" }>>();
+  blocks
+    .filter((block) => block.type === "image")
+    .forEach((image, index) => {
+      const native = readRuntimePromptImageFactIndex(image);
+      const factIndex: unknown =
+        native !== undefined ? native : Array.isArray(indexes) ? indexes[index] : undefined;
+      if (typeof factIndex === "number" && isImageMediaFact(facts[factIndex] ?? {}))
+        managed.set(factIndex, image);
+    });
+  const entries = slots.flatMap((slot) => {
+    const image =
+      slot.image ?? (slot.factIndex !== undefined ? managed.get(slot.factIndex) : undefined);
+    return image ? [{ image: { ...image }, factIndex: slot.factIndex ?? null }] : [];
+  });
+  const finalized = finalizeRuntimePromptImages(entries);
+  const media = facts.map((fact, index) =>
+    isImageMediaFact(fact) && !selected.has(index) ? { ...fact, hydrationSuppressed: true } : fact,
+  );
+  const projected = {
+    ...message,
+    content: [...blocks.filter((block) => block.type !== "image"), ...finalized.images],
+    __openclaw: {
+      ...message["__openclaw"],
+      ...(media.length ? { media } : {}),
+      mediaImageBlockFactIndexes: finalized.imageFactIndexes,
+    },
+  };
+  // Context hooks receive detached plain containers; carry the same transient
+  // omissions in their metadata even when that clone drops runtime symbols.
+  return attachRuntimePromptMediaFacts(projected, media);
 }
 
 export function projectRecordedModelPrompt(
   message: PersistedUserTurnMessage,
   transcript?: AgentMessage,
+  includeImages?: boolean,
 ): PersistedUserTurnMessage;
 export function projectRecordedModelPrompt(
   message: AgentMessage,
   transcript?: AgentMessage,
+  includeImages?: boolean,
 ): AgentMessage;
 export function projectRecordedModelPrompt(
   message: AgentMessage,
   transcript?: AgentMessage,
+  includeImages = true,
 ): AgentMessage {
   if (!isUserMessage(message)) {
     return message;
   }
-  const text = readModelPromptProjection(transcript) ?? readModelPromptProjection(message);
-  if (text === undefined) {
+  const projection =
+    readModelPromptProjectionPayload(transcript) ?? readModelPromptProjectionPayload(message);
+  if (!projection) {
     return message;
   }
+  const { text } = projection;
   let content = message.content;
   if (Array.isArray(content)) {
     let replaced = false;
@@ -203,10 +346,14 @@ export function projectRecordedModelPrompt(
   } else {
     content = text;
   }
-  const metadata = { ...message["__openclaw"] };
+  const imageMessage = includeImages
+    ? projectRecordedModelPromptImages({ ...message, content }, transcript)
+    : message;
+  if (includeImages) content = imageMessage.content;
+  const metadata = { ...imageMessage["__openclaw"] };
   delete metadata.modelPromptProjection;
   const projected: PersistedUserTurnMessage = {
-    ...message,
+    ...imageMessage,
     content,
     timestamp: transcript?.role === "user" ? transcript.timestamp : message.timestamp,
   };

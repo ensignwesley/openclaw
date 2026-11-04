@@ -8,7 +8,10 @@ import { throwCollectedErrors } from "../../infra/error-graph-internal.js";
 import type { ImageContent, TextContent } from "../../llm/types.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import { readRuntimePromptImageFactIndexes } from "../../media/runtime-prompt-image-provenance.js";
+import {
+  bindRuntimePromptImageAdmission,
+  readRuntimePromptImageFactIndexes,
+} from "../../media/runtime-prompt-image-provenance.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import {
@@ -228,6 +231,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     text: string,
     images?: ImageContent[],
     preparedMessage?: PersistedUserTurnMessage,
+    admittedImages: ImageContent[] | undefined = images,
   ): PersistedUserTurnMessage {
     const imageFactIndexes = readRuntimePromptImageFactIndexes(images);
     const message = {
@@ -238,10 +242,13 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     } satisfies PersistedUserTurnMessage;
     // Admission facts must precede accepted steering input. Keep expanded runtime
     // content separate from the prepared display text used during persistence.
-    return Object.assign(
-      message,
-      mergePreparedUserTurnMessageForRuntime({ runtimeMessage: message, preparedMessage }),
-      { content: message.content },
+    return bindRuntimePromptImageAdmission(
+      Object.assign(
+        message,
+        mergePreparedUserTurnMessageForRuntime({ runtimeMessage: message, preparedMessage }),
+        { content: message.content },
+      ),
+      admittedImages,
     );
   }
 
@@ -380,7 +387,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       ) {
         // Transient replay still consumes freshly resolved text/images. Preserve
         // admission facts; captured prompts and carrier pairs keep their original prefix.
-        const runtimeUser = this.createUserMessage(expandedText, currentImages, persistedUser);
+        const runtimeUser = this.createUserMessage(
+          expandedText,
+          currentImages,
+          persistedUser,
+          options?.images,
+        );
         this.agent.state.messages = this.agent.state.messages.with(persistedUserIndex, runtimeUser);
       }
 
@@ -388,7 +400,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
       if (!replayPersistedTurn) {
         messages.push({
-          ...this.createUserMessage(expandedText, currentImages),
+          ...this.createUserMessage(expandedText, currentImages, undefined, options?.images),
           ...(persistedUserIdempotencyKey ? { idempotencyKey: persistedUserIdempotencyKey } : {}),
         });
       }

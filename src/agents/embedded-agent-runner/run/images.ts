@@ -20,7 +20,10 @@ import {
 } from "../../../media/media-facts.js";
 import { resolveMediaReferenceLocalPath } from "../../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
-import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
+import {
+  finalizeRuntimePromptImages,
+  readRuntimePromptImageAdmission,
+} from "../../../media/runtime-prompt-image-provenance.js";
 import { getMediaDir } from "../../../media/store.js";
 import { loadWebMediaRaw, type WebMediaResult } from "../../../media/web-media.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
@@ -535,7 +538,20 @@ async function materializePromptMediaMessages(
     }
     const runtimeMedia = readRuntimePromptMediaFacts(message);
     const meta = Reflect.get(message, "__openclaw");
-    const resolvedMedia = runtimeMedia ?? readPersistedMediaFacts(message) ?? [];
+    let resolvedMedia = runtimeMedia ?? readPersistedMediaFacts(message) ?? [];
+    const admission = readRuntimePromptImageAdmission(message);
+    if (admission && Array.isArray(message.content)) {
+      const remaining = new Set(readPersistedImageBlockFactIndexes(message) ?? []);
+      // A final listener's removal is not a failed file read to hydrate again.
+      const omitted = new Set(
+        admission.filter(
+          (index): index is number => typeof index === "number" && !remaining.has(index),
+        ),
+      );
+      resolvedMedia = resolvedMedia.map((fact, index) =>
+        omitted.has(index) ? { ...fact, hydrationSuppressed: true } : fact,
+      );
+    }
     const mediaImageLayout = readPersistedMediaImageLayout(message);
     if (!resolvedMedia.length) {
       continue;

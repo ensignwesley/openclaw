@@ -14,6 +14,7 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Model } from "../../llm/types.js";
+import { projectRecordedModelPromptImages } from "../../sessions/user-turn-transcript.message.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import { applyLocalNoAuthHeaders } from "../model-auth-markers.js";
 import { resolveProviderRequestPolicy } from "../provider-attribution.js";
@@ -265,11 +266,16 @@ export async function createAgentSession(
     },
     sessionId: initialSessionId,
     transformContext: async (messages) => {
+      let projected: AgentMessage[] | undefined;
+      messages.forEach((message, index) => {
+        const next = projectRecordedModelPromptImages(message);
+        if (next !== message) {
+          projected ??= messages.slice();
+          projected[index] = next;
+        }
+      });
       const runner = extensionRunnerRef.current;
-      if (!runner) {
-        return messages;
-      }
-      return runner.emitContext(messages);
+      return runner ? runner.emitContext(projected ?? messages) : (projected ?? messages);
     },
     resolveDeferredTool: options.resolveDeferredTool,
     prepareNextTurnWithContext: createSessionPrepareNextTurnWithContext(() => agent),

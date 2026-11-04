@@ -1,9 +1,5 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
-import {
-  runWithSessionSourceScope,
-  type SessionSourceAssertion,
-} from "../../../config/sessions/session-source-authority.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import {
   hasLegacyRuntimeContextEnvelope,
@@ -15,11 +11,7 @@ import {
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
 import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
-import {
-  readModelPromptProjection,
-  projectRecordedModelPrompt,
-} from "../../../sessions/user-turn-transcript.message.js";
-import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
+import { projectRecordedModelPrompt } from "../../../sessions/user-turn-transcript.message.js";
 import { memoizeFrozenPlainDataProjection } from "../../../shared/immutable-data.js";
 import { isTextContentBlock } from "../../content-blocks.js";
 import {
@@ -33,7 +25,6 @@ import {
 } from "../../internal-runtime-context.js";
 import type { Agent, AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
-import { bindModelPromptProjectionAppend } from "../../sessions/model-prompt-projection-append.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import {
   contentMatchesTimestampOverride,
@@ -42,7 +33,7 @@ import {
   projectPersistedSenderContext,
   resolveUserTranscriptMessages,
 } from "./attempt-history.js";
-import type { LlmBoundaryOptions, UserTranscriptContext } from "./attempt-llm-boundary.types.js";
+import type { LlmBoundaryOptions } from "./attempt-llm-boundary.types.js";
 import {
   materializeSteeringRuntimeContext,
   type RuntimeContextCustomMessage,
@@ -162,7 +153,11 @@ export function normalizeMessagesForLlmBoundary(
   );
   const normalizedUserMessages = normalizeUserMessagesForLlmBoundary(
     normalized.map((message, index) =>
-      projectRecordedModelPrompt(message, userTranscriptMessages?.[index]),
+      projectRecordedModelPrompt(
+        message,
+        userTranscriptMessages?.[index],
+        options?.projectModelPromptImages !== false,
+      ),
     ),
     options,
   );
@@ -374,199 +369,6 @@ function transformUserTextContent(
       })
     : content;
   return changed ? projected : content;
-}
-
-/** The model-facing text of a prompt before any recorded projection. */
-export function resolveModelPromptText(params: {
-  text: string;
-  transcriptPrompt: string;
-  modelPrompt?: string;
-  prependContext?: string;
-  appendContext?: string;
-}): string {
-  if (params.modelPrompt?.trim() && params.text === params.transcriptPrompt) {
-    return params.modelPrompt;
-  }
-  return [params.prependContext, params.text, params.appendContext]
-    .filter((value): value is string => Boolean(value?.trim()))
-    .join("\n\n");
-}
-
-/** Capture the admitted prompt once; every later request reads the same transcript field. */
-export function installModelPromptProjection(params: {
-  session: {
-    agent: { transformContext?: PromptContextTransform; state?: { messages: AgentMessage[] } };
-  };
-  transcriptPrompt: string;
-  modelPrompt?: string;
-  prependContext?: string;
-  appendContext?: string;
-  shouldCapturePrompt: () => boolean;
-  carrier?: RuntimeContextCustomMessage;
-  recorder?: UserTurnTranscriptRecorder;
-  getUserTranscriptContexts?: () => readonly UserTranscriptContext[] | undefined;
-  withTranscriptWrite?: <T>(write: () => Promise<T>) => Promise<T>;
-  assertCurrent?: SessionSourceAssertion;
-}): () => void {
-  if (
-    !params.recorder?.captureModelPromptProjection &&
-    (!params.modelPrompt?.trim() || params.modelPrompt === params.transcriptPrompt) &&
-    !params.prependContext?.trim() &&
-    !params.appendContext?.trim()
-  ) {
-    return () => {};
-  }
-  const agent = params.session.agent;
-  const originalTransformContext = agent.transformContext;
-  let targetPrompt: AgentMessage | undefined;
-  let promptOwner:
-    | NonNullable<ReturnType<typeof resolveRuntimeContextPromptOwner>>["owner"]
-    | undefined;
-  const resolveProjection = async (messages: AgentMessage[], assertCurrent: () => void) => {
-    if (!params.shouldCapturePrompt()) {
-      return undefined;
-    }
-    await params.recorder?.waitForRuntimePersistence();
-    assertCurrent();
-    const recorded = params.recorder?.getPersistedMessage?.();
-    if (!targetPrompt) {
-      const retained = resolveRuntimeContextPromptOwner(messages);
-      const key = recorded?.idempotencyKey;
-      const paired = params
-        .getUserTranscriptContexts?.()
-        ?.find(
-          ({ transcriptMessage }) =>
-            transcriptMessage === recorded ||
-            (key && Reflect.get(transcriptMessage, "idempotencyKey") === key),
-        )?.runtimeMessage;
-      targetPrompt = params.recorder
-        ? messages.find(
-            (message) =>
-              message === paired ||
-              message === recorded ||
-              (key && message.role === "user" && Reflect.get(message, "idempotencyKey") === key),
-          )
-        : messages[retained?.userIndex ?? findActiveUserMessageIndex(messages)];
-      promptOwner = retained?.owner;
-    }
-    const canonicalPrompt = recorded ?? promptOwner?.transcriptUser ?? targetPrompt;
-    const key = asOptionalObjectRecord(canonicalPrompt)?.idempotencyKey;
-    const target = messages.find(
-      (message) =>
-        message === targetPrompt ||
-        message === canonicalPrompt ||
-        (key && message.role === "user" && Reflect.get(message, "idempotencyKey") === key),
-    );
-    if (target?.role !== "user") {
-      return undefined;
-    }
-    const firstText =
-      typeof target.content === "string"
-        ? target.content
-        : target.content.find(isTextContentBlock)?.text;
-    const targetProjection = readModelPromptProjection(target);
-    const frozen = readModelPromptProjection(canonicalPrompt) ?? targetProjection;
-    let text =
-      frozen ??
-      (firstText === undefined
-        ? undefined
-        : resolveModelPromptText({ ...params, text: firstText }));
-    // Inter-session input keeps its stored source-provenance envelope in current and replayed text.
-    if (
-      frozen === undefined &&
-      text !== undefined &&
-      firstText?.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE) === true &&
-      !text.includes(firstText)
-    ) {
-      text = firstText;
-    }
-    if (
-      text === undefined ||
-      !(
-        frozen !== undefined ||
-        text !== firstText ||
-        (params.recorder?.captureModelPromptProjection &&
-          !firstText?.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE))
-      )
-    ) {
-      return undefined;
-    }
-    return { target, targetProjection, frozen, text };
-  };
-  const releaseCarrier =
-    params.carrier && params.recorder?.prepareModelPromptProjection
-      ? bindModelPromptProjectionAppend(params.carrier, () =>
-          runWithSessionSourceScope(
-            params.assertCurrent,
-            async () => {
-              const assertCurrent = () => params.assertCurrent?.();
-              const projection = await resolveProjection(
-                agent.state?.messages ?? [],
-                assertCurrent,
-              );
-              return projection && projection.frozen === undefined
-                ? params.recorder?.prepareModelPromptProjection?.(projection.text, assertCurrent)
-                : undefined;
-            },
-            { checkAfter: false },
-          ),
-        )
-      : undefined;
-  agent.transformContext = async (messages, signal) =>
-    runWithSessionSourceScope(
-      params.assertCurrent,
-      async () => {
-        let promptMessages = messages;
-        const assertCurrent = () => {
-          signal?.throwIfAborted();
-          params.assertCurrent?.();
-        };
-        const projection = await resolveProjection(messages, assertCurrent);
-        if (projection) {
-          const { target, targetProjection, frozen } = projection;
-          let { text } = projection;
-          const captureProjection = params.recorder?.captureModelPromptProjection;
-          if (frozen === undefined && captureProjection) {
-            const capture = () => captureProjection(text, assertCurrent);
-            const captured = await (params.withTranscriptWrite
-              ? params.withTranscriptWrite(capture)
-              : capture());
-            assertCurrent();
-            const capturedText = readModelPromptProjection(captured);
-            if (capturedText === undefined) {
-              throw new Error("Transcript recorder did not capture the model prompt projection");
-            }
-            text = capturedText;
-          }
-          // Replay snapshots are immutable; only replace the runtime view.
-          if (targetProjection !== text) {
-            const projectedTarget = {
-              ...target,
-              __openclaw: {
-                ...asOptionalObjectRecord(Reflect.get(target, "__openclaw")),
-                modelPromptProjection: { version: 1, text },
-              },
-            };
-            promptMessages = messages.map((message) =>
-              message === target ? projectedTarget : message,
-            );
-            if (agent.state) {
-              agent.state.messages = agent.state.messages.map((message) =>
-                message === target ? projectedTarget : message,
-              );
-            }
-          }
-        }
-        return originalTransformContext
-          ? await originalTransformContext.call(agent, promptMessages, signal)
-          : promptMessages;
-      },
-      { checkAfter: false },
-    );
-  return () => {
-    releaseCarrier?.();
-    agent.transformContext = originalTransformContext;
-  };
 }
 
 // Current text-only turns arrive as arrays; stored turns are strings. Keep their

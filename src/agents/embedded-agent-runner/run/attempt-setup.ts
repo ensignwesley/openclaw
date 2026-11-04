@@ -68,7 +68,6 @@ import {
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "../utils.js";
 import { publishEmbeddedRequestContext } from "./attempt-context-accounting.js";
 import { buildLoopPromptCacheInfo } from "./attempt-context-engine-helpers.js";
-import { resolveModelPromptText } from "./attempt-llm-boundary.js";
 import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
@@ -77,6 +76,7 @@ import {
 import { hydratePromptMediaMessages } from "./images.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { resolveModelPromptText } from "./model-prompt-projection.js";
 import { resolveProjectedRequestPressure } from "./preemptive-compaction.js";
 import { promptImageSessionKey } from "./prompt-image-decisions.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";

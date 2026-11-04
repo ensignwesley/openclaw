@@ -4,6 +4,7 @@ import {
   createRequest,
   createTranscriptCommitIdentity,
 } from "../../gateway/worker-environments/transcript-commit.test-support.js";
+import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   appendSessionTranscriptReport,
@@ -17,7 +18,10 @@ import {
   mutateMemory,
 } from "./session-actor-memory-publication.test-support.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
-import { rewritePreparedTranscriptMessageAtAnchor } from "./session-message-rewrite.js";
+import {
+  capturePreparedTranscriptModelPromptProjection,
+  rewritePreparedTranscriptMessageAtAnchor,
+} from "./session-message-rewrite.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { withPreparedTranscriptCorrection } from "./session-transcript-correction.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
@@ -240,6 +244,32 @@ describe("memory transcript reports and edits", () => {
     const after = await hydrate();
     expect(after.eventJson?.slice(0, before.eventJson?.length)).toEqual(before.eventJson);
     expect(after.events.at(-1)).toMatchObject({ id: "status-2", content: "second" });
+  });
+
+  it("captures admitted image bytes in the memory owner without SQLite or workers", async () => {
+    const { actor, storage, hydrate } = await fixture();
+    await commitMemory(storage, "session.transcript.appendMessage", {
+      scope,
+      messageJson: JSON.stringify({ role: "user", content: "Review ./diagram.png", timestamp: 1 }),
+      cwd: "/synthetic",
+    });
+    const anchor = actor.snapshot(authority)!.transcript.anchors[0]!;
+    const image = { type: "image" as const, data: "aHVtYW4=", mimeType: "image/png" };
+    const captured = await capturePreparedTranscriptModelPromptProjection(
+      anchor,
+      "Review ./diagram.png",
+      () => {},
+      [{ index: 0, image }],
+    );
+    expect(captured?.message.content).toBe("Review ./diagram.png");
+    expect(projectRecordedModelPrompt(captured!.message).content).toEqual([
+      { type: "text", text: "Review ./diagram.png" },
+      image,
+    ]);
+    const stored = (await hydrate()).events.at(-1);
+    expect(stored).toMatchObject({
+      message: { __openclaw: { modelPromptProjection: { images: [{ index: 0, image }] } } },
+    });
   });
 
   it("rewrites an unbound anchored message while preserving later appends and rejecting competing edits", async () => {

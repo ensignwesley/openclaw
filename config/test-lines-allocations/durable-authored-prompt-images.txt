@@ -1,0 +1,2 @@
+256
+# Existing-owner regressions: authored replay after source deletion, mixed custody slots, actor/memory capture and unchanged private display projection.

@@ -27,11 +27,7 @@ import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { truncateOversizedToolResultsInMessages } from "../tool-result-truncation.js";
 import { snapshotRecentMessages } from "./attempt-context-summary.js";
-import {
-  installModelPromptProjection,
-  installRuntimeContextMessageForPrompt,
-  resolveModelPromptText,
-} from "./attempt-llm-boundary.js";
+import { installRuntimeContextMessageForPrompt } from "./attempt-llm-boundary.js";
 import type { UserTranscriptContext } from "./attempt-llm-boundary.types.js";
 import {
   isSessionsYieldAbortError,
@@ -41,6 +37,7 @@ import { waitForEmbeddedAbortSettle } from "./attempt-subscription-cleanup.js";
 import type { createChatGPTV2CompactionBoundary } from "./chatgpt-v2-compaction.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { installModelPromptProjection, resolveModelPromptText } from "./model-prompt-projection.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -309,6 +306,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
         prependContext: input.prependContext,
         appendContext: input.appendContext,
         shouldCapturePrompt: () => captureCurrentPromptForModel,
+        images: input.images,
         recorder: projectionRecorder,
         withTranscriptWrite: input.withTranscriptWrite,
         getUserTranscriptContexts: input.getUserTranscriptContexts,

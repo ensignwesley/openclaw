@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
-import { installModelPromptProjection } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
+import { installModelPromptProjection } from "../agents/embedded-agent-runner/run/model-prompt-projection.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import { createSystemAgentUserTurnRecorder } from "./user-turn-transcript.js";
 

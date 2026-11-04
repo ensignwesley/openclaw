@@ -42,6 +42,7 @@ import {
   persistUserTurnTranscript,
   readTranscriptMessages,
 } from "./user-turn-transcript.test-support.js";
+import type { ModelPromptImage } from "./user-turn-transcript.types.js";
 
 describe("user turn transcript persistence", () => {
   const sessionDirs = useSessionStoreTempDirs(
@@ -284,18 +285,21 @@ describe("user turn transcript persistence", () => {
     });
   });
 
-  it.each([null, { version: 2, text: "stored" }, { version: 1, text: 42 }])(
-    "refuses unsupported or malformed model prompt projections: %j",
-    (modelPromptProjection) => {
-      expect(() =>
-        readModelPromptProjection({
-          role: "user",
-          content: "original",
-          __openclaw: { modelPromptProjection },
-        }),
-      ).toThrow("update OpenClaw to a compatible version or start a new session");
-    },
-  );
+  it.each([
+    null,
+    { version: 2, text: "stored" },
+    { version: 1, text: 42 },
+    { version: 1, text: "stored", images: [{ index: -1, image: {} }] },
+    { version: 1, text: "stored", images: "not-slots" },
+  ])("refuses unsupported or malformed model prompt projections: %j", (modelPromptProjection) => {
+    expect(() =>
+      readModelPromptProjection({
+        role: "user",
+        content: "original",
+        __openclaw: { modelPromptProjection },
+      }),
+    ).toThrow("update OpenClaw to a compatible version or start a new session");
+  });
 
   describe("createUserTurnTranscriptRecorder", () => {
     it("adopts a prepared projection only after commitment and reuses it from another recorder", async () => {
@@ -338,6 +342,77 @@ describe("user turn transcript persistence", () => {
         "cannot be changed",
       );
       await expect(readMessages()).resolves.toEqual([captured]);
+    });
+
+    it.each([0, 1])(
+      "freezes factless image slot %s without copying managed image custody",
+      async (index) => {
+        const input = {
+          ...userInput("Review ./diagram.png", "image-projection:user"),
+          media: [{ path: "/synthetic/managed.png", contentType: "image/png" }],
+        };
+        const recorder = record(input);
+        await recorder.persistApproved();
+        const image = { type: "image" as const, data: "aHVtYW4=", mimeType: "image/png" };
+        const managed = { type: "image" as const, data: "YXR0YWNobWVudA==", mimeType: "image/png" };
+        const slots: ModelPromptImage[] = [
+          { index, image },
+          { index: 1 - index, factIndex: 0 },
+        ].sort((left, right) => left.index - right.index);
+        const captured = await recorder.captureModelPromptProjection!(input.text, () => {}, slots);
+        recorder.markSentToProvider?.();
+        const reopened = record(input);
+        await reopened.persistApproved();
+        // A retry's different runtime bytes cannot replace the first dispatched snapshot.
+        expect(
+          await reopened.captureModelPromptProjection!(input.text, () => {}, [
+            { index, image: managed },
+          ]),
+        ).toEqual(captured);
+        const runtime = {
+          ...captured,
+          content: [{ type: "text" as const, text: input.text }, managed, managed],
+          __openclaw: { ...captured["__openclaw"], mediaImageBlockFactIndexes: [0, null] },
+        };
+        expect(projectRecordedModelPrompt(runtime)).toMatchObject({
+          content: [
+            { type: "text", text: input.text },
+            ...(index === 0 ? [image, managed] : [managed, image]),
+          ],
+          __openclaw: { mediaImageBlockFactIndexes: index === 0 ? [null, 0] : [0, null] },
+        });
+        expect((await readMessages())[0]).toMatchObject({
+          content: input.text,
+          idempotencyKey: input.idempotencyKey,
+          __openclaw: {
+            modelPromptProjection: { version: 1, text: input.text, images: slots },
+          },
+        });
+        expect(JSON.stringify(captured)).not.toContain(managed.data);
+      },
+    );
+
+    it("settles an empty final image choice once after text capture and never adopts retry bytes", async () => {
+      const input = userInput("Review ./diagram.png", "empty-images:user");
+      const recorder = record(input);
+      await recorder.persistApproved();
+      await recorder.captureModelPromptProjection!(input.text, () => {});
+      const captured = await recorder.captureModelPromptProjection!(input.text, () => {}, []);
+      expect(captured).toHaveProperty("__openclaw.modelPromptProjection.images", []);
+      recorder.markSentToProvider?.();
+      const reopened = record(input);
+      await reopened.persistApproved();
+      const image = { type: "image" as const, data: "cmV0cnk=", mimeType: "image/png" };
+      expect(
+        await reopened.captureModelPromptProjection!(input.text, () => {}, [{ index: 0, image }]),
+      ).toEqual(captured);
+      expect(
+        projectRecordedModelPrompt({
+          ...captured,
+          content: [{ type: "text", text: input.text }, image],
+          __openclaw: { ...captured["__openclaw"], mediaImageBlockFactIndexes: [null] },
+        }).content,
+      ).toEqual([{ type: "text", text: input.text }]);
     });
 
     it("freezes capture, dispatch, and replay bytes after steering despite logging patterns", async () => {

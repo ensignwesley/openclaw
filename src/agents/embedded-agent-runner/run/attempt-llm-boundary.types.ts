@@ -19,6 +19,8 @@ export type LlmBoundaryOptions = {
   timezone?: string;
   includeTimestamp?: boolean;
   projectPersistedSenderContext?: boolean;
+  /** SDK context preparation already projected images before extension redactions. */
+  projectModelPromptImages?: boolean;
   userTranscriptContexts?: readonly UserTranscriptContext[];
   currentUserIdempotencyKey?: string;
   currentUserTimestampOverride?: CurrentUserTimestampMatch;

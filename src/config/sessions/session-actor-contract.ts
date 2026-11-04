@@ -1,4 +1,7 @@
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type {
+  PersistedUserTurnMessage,
+  PreparedModelPromptProjection,
+} from "../../sessions/user-turn-transcript.types.js";
 import type { SessionActivitySummary } from "./activity-summary.js";
 import type { ConversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import type { SessionActorTranscriptRow } from "./session-actor-bounded-history.js";
@@ -80,8 +83,8 @@ export type SessionActorAppend = (
   initialization?: SessionMetadataOperations["session.metadata.initialize"]["input"];
   /** Optional prepared session header, committed atomically before this append. */
   header?: SessionMetadataOperations["session.metadata.append"]["input"];
-  /** Final prompt text joins its runtime-context carrier at the same durable point. */
-  modelPromptProjection?: { anchor: TranscriptEntryAnchor; text: string };
+  /** Final prompt projection joins its runtime-context carrier at the same durable point. */
+  modelPromptProjection?: PreparedModelPromptProjection["intent"];
 };
 
 /** The original snapshot preserves canonical adopted IDs, parents, bytes, and versions. */

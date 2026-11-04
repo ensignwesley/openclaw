@@ -7,6 +7,7 @@ import {
   resolveTerminalAssistantTranscriptRunId,
 } from "../../sessions/transcript-events.js";
 import { prepareModelPromptProjection } from "../../sessions/user-turn-transcript.message.js";
+import type { ModelPromptImage } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import type {
@@ -143,7 +144,10 @@ export type SessionMessageRewriteOperations = {
     output: ReturnType<typeof commitSessionMessageRewrite>;
   };
   "session.messageRewrite.modelPrompt": {
-    input: SessionMessageRewriteSelection & { modelPromptProjection: string };
+    input: SessionMessageRewriteSelection & {
+      modelPromptProjection: string;
+      images?: ModelPromptImage[];
+    };
     output: ReturnType<typeof commitSessionMessageRewrite>;
   };
 };
@@ -612,7 +616,7 @@ function prepareMessageRewrite(
 type SessionMessageRewriteInput = SessionMessageRewriteSelection &
   (
     | { expected: SessionMessageRewriteSnapshot; message: unknown }
-    | { modelPromptProjection: string }
+    | { modelPromptProjection: string; images?: ModelPromptImage[] }
   );
 
 export function commitSessionMessageRewrite(
@@ -651,7 +655,11 @@ export function applySessionMessageRewrite<T>(
       const message =
         "message" in input
           ? input.message
-          : prepareModelPromptProjection(current.event.message, input.modelPromptProjection);
+          : prepareModelPromptProjection(
+              current.event.message,
+              input.modelPromptProjection,
+              input.images,
+            );
       const changed = message !== undefined;
       let generation: string | undefined;
       if (changed) {

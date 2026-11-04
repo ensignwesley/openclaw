@@ -1,7 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
 import { prepareModelPromptProjection } from "../../sessions/user-turn-transcript.message.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type {
+  ModelPromptImage,
+  PersistedUserTurnMessage,
+} from "../../sessions/user-turn-transcript.types.js";
 import type { SessionTranscriptWriteScope } from "./session-accessor.sqlite-contract.js";
 import {
   captureLifecycleDatabaseScope,
@@ -47,7 +50,10 @@ async function rewritePreparedTranscriptMessage<T>(
     target: SessionMessageRewriteSelection["target"];
     expectedEntry?: SessionMessageRewriteSelection["expectedEntry"];
     assertCurrent?: () => void;
-  } & ({ prepare(message: unknown): T | undefined } | { modelPromptProjection: string }),
+  } & (
+    | { prepare(message: unknown): T | undefined }
+    | { modelPromptProjection: string; images?: ModelPromptImage[] }
+  ),
 ): Promise<MessageRewriteResult<T> | null> {
   const requested = params.readSource
     ? { ...params.scope, agentId: params.readSource.agentId, storePath: params.readSource.path }
@@ -85,7 +91,11 @@ async function rewritePreparedTranscriptMessage<T>(
         const message =
           "prepare" in params
             ? params.prepare(expected.event.message)
-            : prepareModelPromptProjection(expected.event.message, params.modelPromptProjection);
+            : prepareModelPromptProjection(
+                expected.event.message,
+                params.modelPromptProjection,
+                params.images,
+              );
         const committed = readSessionActorStorageResult(
           await memory.actor.storage.mutate(
             {
@@ -146,7 +156,11 @@ async function rewritePreparedTranscriptMessage<T>(
         return commit(() =>
           executeSessionMessageRewriteOperation(worker, database.agentId, {
             type: "session.messageRewrite.modelPrompt",
-            input: { ...selection, modelPromptProjection: params.modelPromptProjection },
+            input: {
+              ...selection,
+              modelPromptProjection: params.modelPromptProjection,
+              images: params.images,
+            },
           }),
         );
       }
@@ -178,11 +192,13 @@ export function capturePreparedTranscriptModelPromptProjection(
   anchor: TranscriptEntryAnchor,
   text: string,
   assertCurrent: () => void,
+  images?: ModelPromptImage[],
 ) {
   return rewritePreparedTranscriptMessage<PersistedUserTurnMessage>({
     scope: anchor,
     target: { kind: "anchor", anchor, active: "sequence" },
     modelPromptProjection: text,
+    images,
     assertCurrent,
   });
 }

@@ -1,5 +1,9 @@
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  readRuntimePromptImageAdmission,
+  readRuntimePromptImageBlockFactIndexes,
+} from "../../../media/runtime-prompt-image-provenance.js";
 import type { AgentMessage } from "../../runtime/index.js";
 
 export type ImageFactIndex = number | null;
@@ -12,6 +16,13 @@ export type MediaImageLayout = {
 export function readPersistedImageBlockFactIndexes(
   message: AgentMessage,
 ): ImageFactIndex[] | undefined {
+  if (message.role === "user" && Array.isArray(message.content)) {
+    const indexes = readRuntimePromptImageBlockFactIndexes(
+      message,
+      message.content.filter((block) => block.type === "image"),
+    );
+    if (indexes || readRuntimePromptImageAdmission(message)) return indexes;
+  }
   const value = asOptionalRecord(Reflect.get(message, "__openclaw"))?.mediaImageBlockFactIndexes;
   if (!Array.isArray(value)) {
     return undefined;

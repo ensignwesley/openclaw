@@ -9,10 +9,10 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { findActiveUserMessageIndex, resolveUserTranscriptMessages } from "./attempt-history.js";
 import {
-  installModelPromptProjection,
   normalizeMessagesForCurrentPromptBoundary,
   normalizeMessagesForLlmBoundary,
 } from "./attempt-llm-boundary.js";
+import { installModelPromptProjection } from "./model-prompt-projection.js";
 import {
   buildRuntimeContextCustomMessage,
   buildSystemUpdateMessage,

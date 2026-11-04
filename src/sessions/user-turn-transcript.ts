@@ -37,6 +37,7 @@ import {
 } from "./user-turn-transcript-updates.js";
 import {
   buildLateResolvedMediaMessage,
+  projectUserTurnRequesterOrigin,
   resolvePersistedUserTurnMessage,
 } from "./user-turn-transcript.message.js";
 import {
@@ -54,6 +55,7 @@ import {
 } from "./user-turn-transcript.persistence.js";
 import type {
   CreateUserTurnTranscriptRecorderParams,
+  ModelPromptImage,
   PersistedUserTurnMessage,
   UserTurnTranscriptAdmissionReceipt,
   UserTurnOriginalInputCommit,
@@ -122,31 +124,10 @@ export function createUserTurnTranscriptRecorder(
   );
   let staging: Promise<boolean> | undefined;
 
-  // Exposed messages are projections. Only producer facts or exact accepted
-  // pending custody can supply identity to a fresh write.
-  const projectRequesterOrigin = <T extends PersistedUserTurnMessage | undefined>(
-    candidate: T,
-    origin: typeof requesterOrigin,
-  ): T => {
-    if (!candidate) {
-      return candidate;
-    }
-    const { requesterOrigin: _previousOrigin, ...metadata } = candidate["__openclaw"] ?? {};
-    if (origin) {
-      metadata.requesterOrigin = origin;
-    }
-    const next = { ...candidate };
-    delete next["__openclaw"];
-    if (Object.keys(metadata).length > 0) {
-      next["__openclaw"] = metadata;
-    }
-    return next;
-  };
-
   const adoptPendingInput = (receipt: NonNullable<typeof pendingInput>) => {
     pendingInput = receipt;
     requesterOrigin = readSessionPendingInputRequesterOrigin(receipt);
-    message = projectRequesterOrigin(receipt.message, requesterOrigin);
+    message = projectUserTurnRequesterOrigin(receipt.message, requesterOrigin);
     resolvedMessagePromise = Promise.resolve(message);
   };
 
@@ -166,7 +147,7 @@ export function createUserTurnTranscriptRecorder(
 
   const applyMessageOverrides = (candidate: PersistedUserTurnMessage | undefined) => {
     const next = rewritePersistedSteerTargetRunId(
-      projectRequesterOrigin(applyReplacementText(candidate), requesterOrigin),
+      projectUserTurnRequesterOrigin(applyReplacementText(candidate), requesterOrigin),
       confirmedSteerTargetRunId,
     );
     // Native mirrors must reuse this admission even when no transport supplied a key.
@@ -332,7 +313,11 @@ export function createUserTurnTranscriptRecorder(
     await admissionWrite;
   };
 
-  const prepareProjectionParams = async (text: string, assertCurrent: () => void) => {
+  const prepareProjectionParams = async (
+    text: string,
+    assertCurrent: () => void,
+    images?: ModelPromptImage[],
+  ) => {
     await waitForRuntimePersistence();
     if (!admissionReceipt && selfPersistencePromise) {
       await selfPersistencePromise;
@@ -346,6 +331,7 @@ export function createUserTurnTranscriptRecorder(
       admission,
       message: admittedMessage,
       text,
+      images,
       assertCurrent,
       assertWritable: () => {
         assertCurrent();
@@ -441,7 +427,7 @@ export function createUserTurnTranscriptRecorder(
           persistUserTurnInput(recorder, {
             ...resolvedTarget,
             logicalTurnId,
-            message: projectRequesterOrigin(candidate, requesterOrigin),
+            message: projectUserTurnRequesterOrigin(candidate, requesterOrigin),
             sessionTurnMutation: params.sessionTurnMutation,
             expectedSessionId: options.expectedSessionId || resolvedTarget.expectedSessionId,
             sessionLifecyclePatch: options.sessionLifecyclePatch ?? params.sessionLifecyclePatch,
@@ -586,11 +572,11 @@ export function createUserTurnTranscriptRecorder(
             trackCompletion: params.trackInputCompletion,
             retryCancelled: options.retryCancelled || params.sessionTurnMutation?.kind === "goal",
             replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,
-            message: projectRequesterOrigin(candidate, requesterOrigin),
+            message: projectUserTurnRequesterOrigin(candidate, requesterOrigin),
             onCommitted: adoptPendingInput,
             prepareMessageAfterIdempotencyCheck: (next) =>
               preparePersistedUserTurnMessageForTranscriptWrite(
-                projectRequesterOrigin(next, stagedOrigin),
+                projectUserTurnRequesterOrigin(next, stagedOrigin),
                 {
                   ...target,
                   beforeMessageWrite: params.beforeMessageWrite ?? target.beforeMessageWrite,
@@ -650,10 +636,14 @@ export function createUserTurnTranscriptRecorder(
     },
     getPersistedMessage: () =>
       admittedMessage ?? runtimePersistedMessage ?? persistedResult?.message,
-    captureModelPromptProjection: async (text, assertCurrent) =>
-      capturePersistedModelPromptProjection(await prepareProjectionParams(text, assertCurrent)),
-    prepareModelPromptProjection: async (text, assertCurrent) =>
-      preparePersistedModelPromptProjection(await prepareProjectionParams(text, assertCurrent)),
+    captureModelPromptProjection: async (text, assertCurrent, images) =>
+      capturePersistedModelPromptProjection(
+        await prepareProjectionParams(text, assertCurrent, images),
+      ),
+    prepareModelPromptProjection: async (text, assertCurrent, images) =>
+      preparePersistedModelPromptProjection(
+        await prepareProjectionParams(text, assertCurrent, images),
+      ),
     getAdmissionReceipt: () => admissionReceipt,
     setAdmissionHandler: (handler) => {
       admissionHandler = handler;

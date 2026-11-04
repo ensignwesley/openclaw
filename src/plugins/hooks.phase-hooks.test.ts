@@ -1,7 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { resolveModelPromptText } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { resolveModelPromptText } from "../agents/embedded-agent-runner/run/model-prompt-projection.js";
 import { canonicalizeSessionEntry } from "../agents/sessions/session-manager-persistence-entry.js";
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
 import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json-normalize.js";

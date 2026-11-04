@@ -23,6 +23,7 @@ import type {
 } from "../config/sessions/transcript-entry-anchor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ImageContent } from "../llm/types.js";
 import type { MediaFactInput } from "../media/media-facts.js";
 import type { InputProvenance } from "./input-provenance.js";
 
@@ -231,8 +232,14 @@ type UserTurnPersistenceOptions = {
   cwd?: string;
 };
 
+/** Only loader-admitted images without an attachment fact need a durable byte snapshot. */
+export type ModelPromptImage = { index: number } & (
+  | { image: ImageContent; factIndex?: never }
+  | { factIndex: number; image?: never }
+);
+
 export type PreparedModelPromptProjection = {
-  intent: { anchor: TranscriptEntryAnchor; text: string };
+  intent: { anchor: TranscriptEntryAnchor; text: string; images?: ModelPromptImage[] };
   onCommitted: (result: SessionMessageRewriteResult | null) => Promise<PersistedUserTurnMessage>;
 };
 
@@ -272,15 +279,17 @@ export type UserTurnTranscriptRecorder = {
   /** Confirms exact-run steering provenance after transcript commitment is proven. */
   confirmSteerTargetRunIdForPersistence?: (targetRunId: string) => Promise<void>;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
-  /** Freeze model-facing text on the canonical user record before its first provider dispatch. */
+  /** Freeze the model-facing projection on the canonical user record before first dispatch. */
   captureModelPromptProjection?: (
     text: string,
     assertCurrent: () => void,
+    images?: ModelPromptImage[],
   ) => Promise<PersistedUserTurnMessage>;
   /** Prepare a projection for the carrier's actor commit without publishing it early. */
   prepareModelPromptProjection?: (
     text: string,
     assertCurrent: () => void,
+    images?: ModelPromptImage[],
   ) => Promise<PreparedModelPromptProjection | undefined>;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
   /** Persistence and `waitForRuntimePersistence` settle the handler's write and reject on its failure. */
