@@ -26,7 +26,7 @@ import * as sourceReferences from "./plugin-source-references.js";
 import { capturePluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
 import { getPreparedMessageToolCatalogForRegistry } from "./prepared-message-tool-catalog.js";
 import { loadValidatedPublicSurfaceModule } from "./public-surface-loader.js";
-import { setActivePluginRegistry } from "./runtime.js";
+import { clearActivePluginRegistry, setActivePluginRegistry } from "./runtime.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -55,25 +55,30 @@ it("advertises identical channel message schemas before and after registry activ
   await using cache = createPluginCache();
   await withPluginCache(cache, async () => {
     const registry = await loadOpenClawPluginsAsync({ config, activate: false });
-    expect(registry.plugins.find(({ id }) => id === plugin.id)?.status).toBe("loaded");
-    expect(registry.channels.map(({ plugin }) => plugin.id)).toEqual([plugin.id]);
-    const discover = () =>
-      resolveMessageToolDiscoveryAsync({
-        cfg: config,
-        sessionKey: "agent:main:catalog-fixture",
-        sessionId: "catalog-fixture",
-        agentId: "main",
-        preparedMessageToolCatalog: getPreparedMessageToolCatalogForRegistry(registry),
-      });
-    const local = await discover();
-    setActivePluginRegistry(registry);
-    const gateway = await discover();
+    try {
+      expect(registry.plugins.find(({ id }) => id === plugin.id)?.status).toBe("loaded");
+      expect(registry.channels.map(({ plugin }) => plugin.id)).toEqual([plugin.id]);
+      const discover = () =>
+        resolveMessageToolDiscoveryAsync({
+          cfg: config,
+          sessionKey: "agent:main:catalog-fixture",
+          sessionId: "catalog-fixture",
+          agentId: "main",
+          preparedMessageToolCatalog: getPreparedMessageToolCatalogForRegistry(registry),
+        });
+      const local = await discover();
+      setActivePluginRegistry(registry);
+      const gateway = await discover();
 
-    expect(gateway.actions).toContain("react");
-    expect(gateway.schema.properties).toHaveProperty("fixtureLabel");
-    expect(local.actions).toContain("react");
-    expect(local.schema.properties).toHaveProperty("fixtureLabel");
-    expect(JSON.stringify(local.schema)).toBe(JSON.stringify(gateway.schema));
+      expect(gateway.actions).toContain("react");
+      expect(gateway.schema.properties).toHaveProperty("fixtureLabel");
+      expect(local.actions).toContain("react");
+      expect(local.schema.properties).toHaveProperty("fixtureLabel");
+      expect(JSON.stringify(local.schema)).toBe(JSON.stringify(gateway.schema));
+    } finally {
+      // Activation transfers instance custody out of the operation cache.
+      await clearActivePluginRegistry(registry);
+    }
   });
 });
 

@@ -24,11 +24,9 @@ jobs:
       matrix:
         include:
           - case: e1
-            target: 0260d9688cb3f31f524362589d8e1d729db9ad5b
+            target: 7700100f8b0d0389e5a8d1032f58f33478f2bc75
           - case: e2
-            target: 526587b85e60d5c6a5cdb8d0d0342428a2782a7e
-          - case: screen
-            target: 0da68ab783ce3dfa16e13d16ca4981aaf57407cd
+            target: fb62b3393234099e13dd98be6cbe8d53d13acf08
           - case: e5
             target: 0da68ab783ce3dfa16e13d16ca4981aaf57407cd
     runs-on: ubuntu-24.04

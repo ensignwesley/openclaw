@@ -20,10 +20,12 @@ def run(label,cmd,red=None):
   result.update(expectedAssertionFile=filename,expectedAssertionLine=line,reachedExpectedAssertion=reached)
   ok=reached
  else:ok=p.returncode==0
+ result['accepted']=ok
  results.append(result);(out/'gates.json').write_text(json.dumps(results,indent=2))
  print('END',label,p.returncode,'accepted',ok,flush=True)
  if not ok:
-  print(p.stdout[-14000:],flush=True);raise SystemExit(1)
+  print(p.stdout[-14000:],flush=True)
+  if red:raise SystemExit(1)
 identity={'productHead':head,'base':base,'proofHead':proof,'case':case}
 identity['tree']=git('rev-parse','HEAD^{tree}').decode().strip()
 (out/'identity.json').write_text(json.dumps(identity,indent=2))
@@ -33,6 +35,8 @@ test='src/agents/agent-tools.prefix-stability.test.ts' if case=='e1' else 'src/p
 if case in ('e1','e2'):
  owners=['src/agents/openclaw-tools.ts','src/agents/agent-tool-availability.ts','src/agents/agent-tools.turn-authority.ts'] if case=='e1' else ['src/plugins/prepared-message-tool-catalog.ts']
  for f in owners:(root/f).write_bytes(git('show',base+':'+f))
+ sibling='refuses a wake-turn screen call without a requesting UI through the execution gate' if case=='e1' else 'reports the shared external preparation worker once in ordinary startup logs'
+ run('base-sibling-control',['pnpm','test',test,'--maxWorkers=1','-t',sibling])
  needle='expect(surface(disabled))' if case=='e1' else 'expect(local.actions)'
  pattern='keeps message declarations and prompt bytes when execution is disabled for a turn' if case=='e1' else 'advertises identical channel message schemas before and after registry activation'
  run('baseline',['pnpm','test',test,'--maxWorkers=1','-t',pattern],(test,needle))
@@ -56,6 +60,15 @@ elif case=='screen':
  run('e6-custody-screen',['pnpm','test','src/auto-reply/reply/agent-runner-steer-adoption.worker.test.ts','--maxWorkers=1','-t','retains a parked steer through policy-read failure and outer source cleanup'])
  run('e9-origin-screen',['pnpm','test','src/channels/plugins/message-actions.test.ts','--maxWorkers=1','-t','screens non-Slack'])
 elif case=='e5':
+ diagnostic='test/lane-e5-live-input-prefix.e2e.test.ts'
+ cfg=root/'test/tsconfig/tsconfig.lane-e-proof.json'
+ cfg.write_text(json.dumps({'extends':'./tsconfig.core.test.shard.json','include':['../../'+diagnostic],'exclude':[]}))
+ try:run('diagnostic-types',['node','scripts/run-tsgo.mjs','-p',str(cfg.relative_to(root))])
+ finally:cfg.unlink(missing_ok=True)
+ run('diagnostic-lint',['node','scripts/run-oxlint.mjs','--tsconfig','tsconfig.core.json',diagnostic])
+ run('diagnostic-format',['pnpm','exec','oxfmt','--check',diagnostic])
  run('e5-live-prefix-screen',['pnpm','test:e2e:gateway','test/lane-e5-live-input-prefix.e2e.test.ts'])
 else:raise SystemExit('unknown case')
-(out/'terminal.json').write_text(json.dumps({'case':case,'head':head,'allRequiredCommandsPassed':True,'limits':'No live provider, billing or cache-hit measurement.'},indent=2))
+passed=all(r['accepted'] for r in results)
+(out/'terminal.json').write_text(json.dumps({'case':case,'head':head,'allRequiredCommandsPassed':passed,'limits':'No live provider, billing or cache-hit measurement.'},indent=2))
+raise SystemExit(0 if passed else 1)

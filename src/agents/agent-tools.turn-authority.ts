@@ -59,6 +59,19 @@ export function resolveTurnToolSurface(params: {
     const ownerOnly = params.ownerOnlyDenied.has(tool.name);
     // A completion handoff's requester policy may omit the tool; that denial wins.
     const turnTool = turnPolicyTools.get(tool.name);
+    if (!ownerOnly && turnTool && !isAgentToolExecutionAvailable(turnTool)) {
+      // The earlier gate owns its refusal and remedy. Keep that executor behind
+      // the session declaration instead of replacing a client/turn denial with owner guidance.
+      return tool === turnTool
+        ? tool
+        : copyAgentToolMetadata(turnTool, {
+            ...tool,
+            prepareArguments: turnTool.prepareArguments,
+            prepareBeforeToolCallParams: turnTool.prepareBeforeToolCallParams,
+            finalizeBeforeToolCallParams: turnTool.finalizeBeforeToolCallParams,
+            execute: turnTool.execute,
+          });
+    }
     const scopedReads =
       ownerOnly &&
       params.hostSystemTurn === true &&

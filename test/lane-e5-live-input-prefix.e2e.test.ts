@@ -46,7 +46,11 @@ const userText = (item: ProviderInput) =>
 it(
   "diagnoses already-submitted steering custody across real sessions_yield",
   { timeout: 90_000 },
-  async ({ signal }) => {
+  async ({ signal, onTestFinished }) => {
+    const artifactDir = process.env.OPENCLAW_LANE_E5_PROOF_DIR;
+    if (!artifactDir) {
+      throw new Error("OPENCLAW_LANE_E5_PROOF_DIR must name an isolated evidence directory");
+    }
     const token = "lane-e5-isolated-fixture";
     const state = await createOpenClawTestState({
       label: "lane-e5-live-prefix",
@@ -76,12 +80,23 @@ it(
     const submittedCorrection = createDeferred<ProviderRequest>();
     const releaseYield = createDeferred();
     const yielded = createDeferred();
-    const resumed = createDeferred<ProviderRequest>();
+    const resumed = createDeferred<{ body: ProviderRequest; liveAtResume: boolean }>();
     const finished = createDeferred();
     const fixtureAbort = new AbortController();
     const handlers = new Set<Promise<void>>();
-    const fixtureErrors: string[] = [];
-    const capturedRequests: Array<{ raw: string; phase: string; body: ProviderRequest }> = [];
+    const fixtureFailed = createDeferred<never>();
+    void fixtureFailed.promise.catch(() => {});
+    const fixtureErrors: Array<{ name: string; message: string; stack?: string; phase: string }> =
+      [];
+    const capturedRequests: Array<{
+      raw: string;
+      phase: string;
+      url?: string;
+      method?: string;
+      body?: ProviderRequest;
+    }> = [];
+    const cleanup: Record<string, { status: string; error?: string }> = {};
+    const cleanupErrors: string[] = [];
     const sourceObservations: Array<Record<string, unknown>> = [];
     const foreignSamples: Array<{ stage: string; includesCorrection: boolean; keys: number }> = [];
     let correctionOwner: SessionPendingInputOwner | undefined;
@@ -96,6 +111,58 @@ it(
     let stopping = false;
     let steeringRequest: Promise<unknown> | undefined;
     let trace: Record<string, unknown> = { status: "setup-incomplete" };
+    let evidenceWrite = Promise.resolve();
+    let evidenceError: Error | undefined;
+    const errorDetails = (error: unknown) =>
+      error instanceof Error
+        ? { name: error.name, message: error.message, stack: error.stack }
+        : { name: "UnknownError", message: String(error) };
+    const saveEvidence = () => {
+      const snapshot = JSON.stringify(
+        {
+          ...trace,
+          capturedRequests,
+          fixtureErrors,
+          sourceObservations,
+          foreignSamples,
+          rootRequests,
+          childRequests,
+          yieldIssued,
+          cleanup,
+          cleanupErrors,
+          evidenceLimit:
+            "Provider HTTP request bytes captured; scripted response bytes and final chat-event payload not captured.",
+        },
+        null,
+        2,
+      );
+      evidenceWrite = evidenceWrite.then(async () => {
+        try {
+          await fs.mkdir(artifactDir, { recursive: true });
+          await fs.writeFile(path.join(artifactDir, "e5-live-input-prefix.json"), snapshot);
+        } catch (error) {
+          if (!evidenceError) {
+            evidenceError = new Error("E5 evidence write failed", { cause: error });
+            trace = { ...trace, evidenceFailure: errorDetails(error) };
+            fixtureFailed.reject(evidenceError);
+            console.error("LANE_E5_EVIDENCE_FAILURE", JSON.stringify(errorDetails(error)));
+          }
+        }
+      });
+      return evidenceWrite;
+    };
+    const checkpoint = <T>(phase: string, pending: Promise<T>): Promise<T> => {
+      trace = { ...trace, phase };
+      void saveEvidence();
+      return withinTest(Promise.race([pending, fixtureFailed.promise]), signal);
+    };
+    // Persist before cleanup too: a stalled shutdown must leave its last receipt,
+    // rather than erase the original fixture failure and received provider bytes.
+    onTestFinished(async () => {
+      trace = { ...trace, testFinished: true };
+      await saveEvidence();
+      if (evidenceError) throw evidenceError;
+    });
 
     // Observe actual registered owners without extending their lifetime or replacing
     // any custody decision. An ended source means the E5 premise was not reached.
@@ -191,10 +258,19 @@ it(
       state.applyEnv();
       providerServer = createServer((request, response) => {
         const handler = (async () => {
-          expect(request.url).toBe("/v1/responses");
           const raw = await readRequestText(request);
+          const captured: (typeof capturedRequests)[number] = {
+            raw,
+            phase: preparationStage,
+            url: request.url,
+            method: request.method,
+          };
+          capturedRequests.push(captured);
+          void saveEvidence();
+          expect(request.url).toBe("/v1/responses");
           const body: ProviderRequest = JSON.parse(raw);
-          capturedRequests.push({ raw, phase: preparationStage, body });
+          captured.body = body;
+          void saveEvidence();
           const userTexts = body.input.filter((item) => item.role === "user").map(userText);
           const assignment = userTexts.findLast((text) => text.includes("[Subagent Task]"));
           if (assignment?.includes(childMarker)) {
@@ -233,18 +309,34 @@ it(
           }
           expect(step, "one resumed provider exchange").toBe(3);
           expect(yieldIssued, "resume follows actual tool dispatch").toBe(true);
-          resumed.resolve(body);
+          // Observe at request receipt, before the response can settle source custody.
+          const liveAtResume = observeSource("resumed-request-received");
+          resumed.resolve({ body, liveAtResume });
           reply(response, "Synthetic E5 continuation complete.");
         })().catch((error: unknown) => {
-          if (!stopping) fixtureErrors.push(String(error));
-          if (!response.headersSent)
-            response.writeHead(400, { "content-type": "application/json" });
-          response.end(
-            JSON.stringify({ error: { message: "Synthetic E5 fixture contract failed." } }),
-          );
+          if (!stopping) {
+            fixtureErrors.push({ ...errorDetails(error), phase: preparationStage });
+            trace = { ...trace, status: "fixture-contract-failed" };
+            fixtureFailed.reject(error);
+            console.error("LANE_E5_FIXTURE_FAILURE", JSON.stringify(fixtureErrors.at(-1)));
+          }
+          void saveEvidence();
+          if (!response.destroyed && !response.writableEnded) {
+            if (!response.headersSent)
+              response.writeHead(400, { "content-type": "application/json" });
+            response.end(
+              JSON.stringify({ error: { message: "Synthetic E5 fixture contract failed." } }),
+            );
+          }
         });
         handlers.add(handler);
-        void handler.finally(() => handlers.delete(handler));
+        void handler.then(
+          () => handlers.delete(handler),
+          (error: unknown) => {
+            handlers.delete(handler);
+            fixtureFailed.reject(error);
+          },
+        );
       });
       const provider = buildMockOpenAiResponsesProvider(await listenProvider(providerServer));
       gateway = await startGatewayWithClient({
@@ -290,15 +382,18 @@ it(
             finished.resolve();
         },
       });
-      const started = await gateway.client.request<{ status: string; runId: string }>("chat.send", {
-        sessionKey,
-        message: rootMarker,
-        deliver: false,
-        idempotencyKey: randomUUID(),
-      });
+      const started = await checkpoint(
+        "root-chat-send",
+        gateway.client.request<{ status: string; runId: string }>("chat.send", {
+          sessionKey,
+          message: rootMarker,
+          deliver: false,
+          idempotencyKey: randomUUID(),
+        }),
+      );
       expect(started.status).toBe("started");
       rootRunId = started.runId;
-      await withinTest(firstOpen.promise, signal);
+      await checkpoint("first-root-provider-request", firstOpen.promise);
       steeringRequest = gateway.client.request("chat.send", {
         sessionKey,
         message: correction,
@@ -307,19 +402,24 @@ it(
         queueMode: "steer",
       });
       void steeringRequest.catch(() => {});
-      await withinTest(steeringRegistered.promise, signal);
+      await checkpoint("real-steering-owner-registration", steeringRegistered.promise);
       observeSource("registered-before-first-response");
       releaseFirst.resolve();
-      const before = await withinTest(submittedCorrection.promise, signal);
-      await withinTest(steeringRequest, signal);
+      const before = await checkpoint(
+        "submitted-correction-provider-request",
+        submittedCorrection.promise,
+      );
+      await checkpoint("steering-chat-send-settlement", steeringRequest);
       const liveBeforeYield = observeSource("submitted-before-yield");
       releaseYield.resolve();
-      await withinTest(yielded.promise, signal);
+      await checkpoint("actual-yield-lifecycle-event", yielded.promise);
       const liveAfterYield = observeSource("yielded-before-child-completion");
       preparationStage = "after-yield";
       reply(expectDefined(heldChild, "real held child response"), "Synthetic E5 child finished.");
-      const after = await withinTest(resumed.promise, signal);
-      const liveAtResume = observeSource("resumed-request");
+      const { body: after, liveAtResume } = await checkpoint(
+        "resumed-provider-request",
+        resumed.promise,
+      );
       const correctionIndex = before.input.findIndex(
         (item) => item.role === "user" && userText(item).includes(correction),
       );
@@ -359,48 +459,62 @@ it(
       // source custody is a drop disposition, never repaired with a synthetic hold.
       if (qualified)
         expect(digest(resumedPrefix), "already-submitted provider prefix").toBe(digest(prefix));
-      await withinTest(finished.promise, signal);
+      await checkpoint("final-chat-event", finished.promise);
       expect(fixtureErrors).toEqual([]);
+    } catch (error) {
+      trace = {
+        ...trace,
+        status: trace.status === "setup-incomplete" ? "execution-failed" : trace.status,
+        failure: errorDetails(error),
+      };
+      void saveEvidence();
+      throw error;
     } finally {
-      const cleanupErrors: string[] = [];
       stopping = true;
+      trace = { ...trace, cleanupJoined: false };
+      void saveEvidence();
       fixtureAbort.abort();
       releaseFirst.resolve();
       releaseYield.resolve();
       providerServer?.closeAllConnections();
+      const join = async (name: string, close: () => Promise<unknown>) => {
+        cleanup[name] = { status: "pending" };
+        void saveEvidence();
+        try {
+          await close();
+          cleanup[name] = { status: "joined" };
+        } catch (error) {
+          cleanupErrors.push(`${name}: ${String(error)}`);
+          cleanup[name] = { status: "failed", error: String(error) };
+        }
+        void saveEvidence();
+      };
       if (gateway) {
-        await disconnectGatewayClient(gateway.client).catch((error: unknown) =>
-          cleanupErrors.push(String(error)),
-        );
-        await gateway.server.close().catch((error: unknown) => cleanupErrors.push(String(error)));
+        const activeGateway = gateway;
+        await join("gateway-client", () => disconnectGatewayClient(activeGateway.client));
+        await join("gateway-server", () => activeGateway.server.close());
       }
       if (providerServer?.listening) {
         const server = providerServer;
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await join(
+          "provider-server",
+          () =>
+            new Promise<void>((resolve, reject) => {
+              server.close((error) => (error ? reject(error) : resolve()));
+            }),
+        );
       }
-      await Promise.allSettled(handlers);
-      await Promise.allSettled(steeringRequest ? [steeringRequest] : []);
+      await join("provider-handlers", () => Promise.allSettled(handlers));
+      await join("steering-request", () =>
+        Promise.allSettled(steeringRequest ? [steeringRequest] : []),
+      );
       unsubscribe();
       ownerSpy.mockRestore();
       readerSpy.mockRestore();
-      await state.cleanup().catch((error: unknown) => cleanupErrors.push(String(error)));
-      trace = {
-        ...trace,
-        capturedRequests,
-        fixtureErrors,
-        cleanupErrors,
-        cleanupJoined: cleanupErrors.length === 0,
-        evidenceLimit:
-          "Provider HTTP request bytes captured; scripted response bytes and final chat-event payload not captured.",
-      };
-      const artifactDir = process.env.OPENCLAW_LANE_E5_PROOF_DIR;
-      if (artifactDir) {
-        await fs.mkdir(artifactDir, { recursive: true });
-        await fs.writeFile(
-          path.join(artifactDir, "e5-live-input-prefix.json"),
-          JSON.stringify(trace, null, 2),
-        );
-      }
+      await join("test-state", () => state.cleanup());
+      trace = { ...trace, cleanupJoined: cleanupErrors.length === 0 };
+      await saveEvidence();
+      if (evidenceError) throw evidenceError;
       console.info(`LANE_E5_DIAGNOSTIC ${JSON.stringify(trace)}`);
       expect(cleanupErrors, "all fixture cleanup joined successfully").toEqual([]);
     }
