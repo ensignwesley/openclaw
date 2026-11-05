@@ -72,6 +72,7 @@ it(
     const childMarker = `fixture://lane-e5/child/${randomUUID()}`;
     const correction = `Synthetic E5 steering correction ${randomUUID()}`;
     const steeringKey = randomUUID();
+    const steeringInputKey = `${steeringKey}:user`;
     const sessionKey = `agent:main:lane-e5-${randomUUID()}`;
     const firstOpen = createDeferred();
     const steeringRegistered = createDeferred();
@@ -98,6 +99,8 @@ it(
     const cleanup: Record<string, { status: string; error?: string }> = {};
     const cleanupErrors: string[] = [];
     const sourceObservations: Array<Record<string, unknown>> = [];
+    const ownerRegistrations: Array<Record<string, unknown>> = [];
+    let steeringSettlement: Record<string, unknown> = { status: "not-sent" };
     const foreignSamples: Array<{ stage: string; includesCorrection: boolean; keys: number }> = [];
     let correctionOwner: SessionPendingInputOwner | undefined;
     let heldChild: ServerResponse | undefined;
@@ -124,6 +127,8 @@ it(
           capturedRequests,
           fixtureErrors,
           sourceObservations,
+          ownerRegistrations,
+          steeringSettlement,
           foreignSamples,
           rootRequests,
           childRequests,
@@ -161,7 +166,10 @@ it(
     onTestFinished(async () => {
       trace = { ...trace, testFinished: true };
       await saveEvidence();
-      if (evidenceError) throw evidenceError;
+      expect(cleanupErrors, "all fixture cleanup joined successfully").toEqual([]);
+      if (evidenceError) {
+        throw evidenceError;
+      }
     });
 
     // Observe actual registered owners without extending their lifetime or replacing
@@ -171,9 +179,27 @@ it(
       .spyOn(pendingOwners, "registerSessionPendingInputOwner")
       .mockImplementation((owner) => {
         register(owner);
-        if (owner.idempotencyKey === steeringKey) {
+        ownerRegistrations.push({
+          sessionKey: owner.sessionKey,
+          idempotencyKey: owner.idempotencyKey,
+          inputId: owner.inputId,
+          stage: preparationStage,
+        });
+        void saveEvidence();
+        if (owner.idempotencyKey === steeringInputKey) {
           correctionOwner = owner;
           steeringRegistered.resolve();
+        }
+      });
+    const releaseOwner = pendingOwners.releaseSessionPendingInputOwner;
+    const releaseSpy = vi
+      .spyOn(pendingOwners, "releaseSessionPendingInputOwner")
+      .mockImplementation((owner) => {
+        const correctionReleased = owner === correctionOwner;
+        releaseOwner(owner);
+        if (correctionReleased) {
+          observeSource("real-owner-released");
+          void saveEvidence();
         }
       });
     const captureReader = pendingOwners.captureForeignLiveSessionPendingInputReader;
@@ -184,9 +210,11 @@ it(
         return (scope) => {
           const result = read(scope);
           if (scope.sessionKey === sessionKey) {
+            const owner = correctionOwner?.promotedOwner ?? correctionOwner;
             foreignSamples.push({
               stage: preparationStage,
-              includesCorrection: [...result.values()].includes(steeringKey),
+              includesCorrection:
+                owner !== undefined && result.get(owner.transcriptInputId) === owner.idempotencyKey,
               keys: result.size,
             });
           }
@@ -322,8 +350,9 @@ it(
           }
           void saveEvidence();
           if (!response.destroyed && !response.writableEnded) {
-            if (!response.headersSent)
+            if (!response.headersSent) {
               response.writeHead(400, { "content-type": "application/json" });
+            }
             response.end(
               JSON.stringify({ error: { message: "Synthetic E5 fixture contract failed." } }),
             );
@@ -365,7 +394,9 @@ it(
           gateway: { auth: { mode: "token", token } },
         },
         onEvent: (event) => {
-          if (event.event !== "chat") return;
+          if (event.event !== "chat") {
+            return;
+          }
           const payload = event.payload as {
             sessionKey?: string;
             state?: string;
@@ -378,8 +409,9 @@ it(
             !payload.yielded &&
             payload.message &&
             yieldIssued
-          )
+          ) {
             finished.resolve();
+          }
         },
       });
       const started = await checkpoint(
@@ -394,13 +426,28 @@ it(
       expect(started.status).toBe("started");
       rootRunId = started.runId;
       await checkpoint("first-root-provider-request", firstOpen.promise);
-      steeringRequest = gateway.client.request("chat.send", {
-        sessionKey,
-        message: correction,
-        deliver: false,
-        idempotencyKey: steeringKey,
-        queueMode: "steer",
-      });
+      steeringSettlement = { status: "pending" };
+      steeringRequest = gateway.client
+        .request("chat.send", {
+          sessionKey,
+          message: correction,
+          deliver: false,
+          idempotencyKey: steeringKey,
+          queueMode: "steer",
+        })
+        .then(
+          (result) => {
+            steeringSettlement = { status: "resolved", result };
+            void saveEvidence();
+            return result;
+          },
+          (error: unknown) => {
+            steeringSettlement = { status: "rejected", error: errorDetails(error) };
+            void saveEvidence();
+            fixtureFailed.reject(error);
+            throw error;
+          },
+        );
       void steeringRequest.catch(() => {});
       await checkpoint("real-steering-owner-registration", steeringRegistered.promise);
       observeSource("registered-before-first-response");
@@ -457,8 +504,9 @@ it(
       };
       // Only a real still-live foreign source is a counterexample to E5. Ended
       // source custody is a drop disposition, never repaired with a synthetic hold.
-      if (qualified)
+      if (qualified) {
         expect(digest(resumedPrefix), "already-submitted provider prefix").toBe(digest(prefix));
+      }
       await checkpoint("final-chat-event", finished.promise);
       expect(fixtureErrors).toEqual([]);
     } catch (error) {
@@ -510,13 +558,12 @@ it(
       );
       unsubscribe();
       ownerSpy.mockRestore();
+      releaseSpy.mockRestore();
       readerSpy.mockRestore();
       await join("test-state", () => state.cleanup());
       trace = { ...trace, cleanupJoined: cleanupErrors.length === 0 };
       await saveEvidence();
-      if (evidenceError) throw evidenceError;
       console.info(`LANE_E5_DIAGNOSTIC ${JSON.stringify(trace)}`);
-      expect(cleanupErrors, "all fixture cleanup joined successfully").toEqual([]);
     }
   },
 );

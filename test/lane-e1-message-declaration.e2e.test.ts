@@ -45,8 +45,8 @@ test("message declarations and system prompt survive a disabled turn in one dura
     [];
   const rpcCalls: unknown[] = [];
   const summary: Record<string, unknown> = { phase: "setup", verdict: "not-reached" };
-  let client: GatewayClient | undefined;
   const resources: {
+    client?: GatewayClient;
     instance?: OpenClawTestInstance;
     closeModel?: () => Promise<void>;
   } = {};
@@ -54,7 +54,7 @@ test("message declarations and system prompt survive a disabled turn in one dura
     const cleanup: Record<string, unknown> = {};
     const failures: unknown[] = [];
     for (const [name, close] of [
-      ["client", () => client?.stopAndWait()],
+      ["client", () => resources.client?.stopAndWait()],
       ["gateway", () => resources.instance?.cleanup()],
       ["model", () => resources.closeModel?.()],
     ] as const) {
@@ -177,6 +177,7 @@ test("message declarations and system prompt survive a disabled turn in one dura
       ...config,
       agents: {
         ...config.agents,
+        entries: { main: {} },
         defaults: {
           ...config.agents?.defaults,
           sandbox: { mode: "off" },
@@ -224,7 +225,7 @@ test("message declarations and system prompt survive a disabled turn in one dura
     onHelloOk: () => connected.resolve(),
     onConnectError: connected.reject,
   });
-  client = connection;
+  resources.client = connection;
   connection.start();
   await connected.promise;
   const sessionKey = "agent:main:lane-e1-message-proof";

@@ -57,7 +57,7 @@ it("advertises identical channel message schemas before and after registry activ
     const registry = await loadOpenClawPluginsAsync({ config, activate: false });
     try {
       expect(registry.plugins.find(({ id }) => id === plugin.id)?.status).toBe("loaded");
-      expect(registry.channels.map(({ plugin }) => plugin.id)).toEqual([plugin.id]);
+      expect(registry.channels.map((entry) => entry.plugin.id)).toEqual([plugin.id]);
       const discover = () =>
         resolveMessageToolDiscoveryAsync({
           cfg: config,

@@ -26,7 +26,7 @@ jobs:
           - case: e1
             target: 7700100f8b0d0389e5a8d1032f58f33478f2bc75
           - case: e2
-            target: fb62b3393234099e13dd98be6cbe8d53d13acf08
+            target: bb52da245b7935176db10fa1e954e4c0e8235db0
           - case: e5
             target: 0da68ab783ce3dfa16e13d16ca4981aaf57407cd
     runs-on: ubuntu-24.04
