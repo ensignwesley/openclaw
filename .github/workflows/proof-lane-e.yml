@@ -1,0 +1,88 @@
+name: Lane E1 current authority proof
+on:
+  push:
+    branches: ["proof/lane-e1-current-20261105"]
+permissions:
+  contents: read
+jobs:
+  workflow-validation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+          install-bun: "true"
+      - run: pnpm check:workflows
+  proof:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: e1
+            target: e11ba635a8dcbe9191beecd646ff0d0ae556a093
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select exact independent product or frozen-main diagnostic
+        env:
+          PROOF_SHA: ${{ github.sha }}
+          TARGET_SHA: ${{ matrix.target }}
+          PROOF_CASE: ${{ matrix.case }}
+        run: |
+          set -euo pipefail
+          git show "$PROOF_SHA:.github/workflows/proof-lane-e.py" > "$RUNNER_TEMP/lane-e-driver.py"
+          git checkout --detach "$TARGET_SHA"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          case "$PROOF_CASE" in
+            e1) paths=(test/lane-e1-message-declaration.e2e.test.ts) ;;
+            e2) paths=() ;;
+            screen) paths=(src/auto-reply/reply/agent-runner-steer-adoption.worker.test.ts src/channels/plugins/message-actions.test.ts) ;;
+            e5) paths=(test/lane-e5-live-input-prefix.e2e.test.ts) ;;
+            *) exit 1 ;;
+          esac
+          for file in "${paths[@]}"; do
+            git show "$PROOF_SHA:$file" > "$file"
+          done
+          evidence="$RUNNER_TEMP/lane-e-${PROOF_CASE}"
+          mkdir -p "$evidence"
+          git rev-parse HEAD > "$evidence/checkout-head.txt"
+          git ls-tree -r HEAD > "$evidence/tree.txt"
+          git diff --binary > "$evidence/diagnostic-overlay.patch"
+          for file in "${paths[@]}"; do sha256sum "$file"; done > "$evidence/diagnostic-sha256.txt"
+      - name: Pinned Node and independent frozen dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+          install-bun: "true"
+      - name: Prepare canonical stamped runtime and AI package
+        run: node scripts/prepare-vitest-runtime.mjs --with-ai-package
+      - name: Exact before-after owner and product proof
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
+          OPENCLAW_E2E_WORKERS: "1"
+          OPENCLAW_E2E_VERBOSE: "1"
+          LANE_E_CASE: ${{ matrix.case }}
+          LANE_E_BASE: bf0d53d5c17a666f34cfc3ef1671e726be235a9a
+          LANE_E_PROOF: ${{ github.sha }}
+          LANE_E_OUTPUT: ${{ runner.temp }}/lane-e-${{ matrix.case }}
+          LANE_E1_PROOF_OUTPUT: ${{ runner.temp }}/lane-e-e1/gateway
+        run: python3 "$RUNNER_TEMP/lane-e-driver.py"
+      - name: Preserve proof and failure evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: lane-e-${{ matrix.case }}-${{ github.sha }}
+          path: ${{ runner.temp }}/lane-e-${{ matrix.case }}/
+          if-no-files-found: error
+          retention-days: 7
