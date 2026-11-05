@@ -19,6 +19,8 @@ import { getExistingFollowupQueue } from "./queue/state.js";
 import type { FollowupRun } from "./queue/types.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
+import { retireUnadoptedReplySource } from "./reply-source-binding.js";
+import * as toolAuthority from "./reply-tool-authority.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { createQueueTestRun } from "./reply-tool-authority.test-support.js";
 
@@ -250,3 +252,71 @@ it.for([
     });
   },
 );
+
+it("retains a parked steer through policy-read failure and outer source cleanup", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const key = "agent:main:steer-policy-read-failure";
+    const run = createQueueTestRun({
+      prompt: "preserve this input after the policy read fails",
+      messageId: "policy-read-failure-source",
+      originatingChannel: "webchat",
+    });
+    Object.assign(run.run, { agentId: "main", sessionKey: key, senderIsOwner: true });
+    const { operation, fingerprint } = await prepareOperation(run);
+    const nativeQueue = vi.fn(async () => {});
+    attachSteerBackend(operation, fingerprint, { queueMessage: nativeQueue });
+    const delivered = createDeferred<FollowupRun>();
+    const followup = vi.fn(async (queued: FollowupRun) => {
+      delivered.resolve(queued);
+    });
+    const resultState: ReplyOperationRunState = {};
+    const unavailable = new Error("Synthetic policy worker read failed");
+    // Fault only the awaited policy read: reservation, ownership, fallback,
+    // producer cleanup, and ordered followup dispatch remain production code.
+    const read = vi
+      .spyOn(toolAuthority, "prepareFollowupRunToolAuthorityFingerprint")
+      .mockImplementationOnce(async () => {
+        expect(run.controllerInput?.phase).toBe("injecting");
+        expect(run.controllerInput?.injection).toBeDefined();
+        throw unavailable;
+      });
+    try {
+      await expect(
+        runActiveReplySteer(
+          createSteerParams(key, run, operation, {
+            opts: { runId: run.messageId },
+            replyOperationRunState: resultState,
+            runFollowup: followup,
+          }),
+        ),
+      ).rejects.toBe(unavailable);
+      expect(read).toHaveBeenCalledOnce();
+      expect(nativeQueue).not.toHaveBeenCalled();
+      const input = run.controllerInput;
+      expect(input).toBeDefined();
+      expect(input?.injection).toBeUndefined();
+      expect(input?.custody.enqueued).toBe(true);
+      expect(input?.custody.completed).not.toBe(true);
+      // Both the runner and its outer producer perform this cleanup on failure.
+      retireUnadoptedReplySource(input);
+      retireUnadoptedReplySource(input);
+      expect(input?.custody.completed).not.toBe(true);
+      expect(input?.mailbox.entries).toContain(input);
+      expect(followup).not.toHaveBeenCalled();
+      read.mockRestore();
+      operation.complete();
+      const queued = await withinTest(delivered.promise, signal);
+      expect(queued).toBe(run);
+      expect(queued.controllerInput).toBe(input);
+      expect(queued.messageId).toBe("policy-read-failure-source");
+      expect(queued.prompt).toBe("preserve this input after the policy read fails");
+      expect(followup).toHaveBeenCalledExactlyOnceWith(run);
+    } finally {
+      read.mockRestore();
+      clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target);
+      operation.complete();
+    }
+  });
+});

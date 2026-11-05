@@ -255,6 +255,42 @@ it.each<["bundled" | "workspace", Actions["providerOwnedReadGates"], boolean]>([
   register({ origin, actions: { providerOwnedReadGates } });
   await expectAccess({ params: { channelId: "configured" }, toolContext: undefined }, allowed);
 });
+
+it.each(["edit", "delete"] as const)(
+  "screens non-Slack %s admission by plugin origin",
+  async (action) => {
+    const context: Partial<DispatchContext> = {
+      channel: "slack",
+      action,
+      params: { channelId: "C_CONFIGURED", messageId: "1234567890.000001" },
+      toolContext: currentContext("discord", "discord:channel:current"),
+    };
+    register({
+      channel: "slack",
+      origin: "workspace",
+      actions: {
+        providerOwnedReadGates: true,
+        describeMessageTool: () => ({ actions: ["edit", "delete"] }),
+      },
+    });
+    await expectDenied(context);
+
+    register({
+      channel: "slack",
+      origin: "bundled",
+      actions: {
+        providerOwnedReadGates: true,
+        describeMessageTool: () => ({ actions: ["edit", "delete"] }),
+      },
+    });
+    await expectAccess(context, true);
+    expect(handleAction.mock.calls[0]?.[0]).toMatchObject({
+      channel: "slack",
+      action,
+      params: context.params,
+    });
+  },
+);
 const aliasContext: Partial<DispatchContext> = {
   channel: "imessage",
   action: "react",
