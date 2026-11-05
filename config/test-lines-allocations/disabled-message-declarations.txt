@@ -1,0 +1,2 @@
+29
+# Focused owner regression for stable message declarations with execution denial across persistent-session turns.
