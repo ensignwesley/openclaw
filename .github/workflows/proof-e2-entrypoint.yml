@@ -1,0 +1,131 @@
+name: E2 shipped local CLI catalog proof
+on:
+  push:
+    branches: ["proof/lane-e2-entrypoint-20261105"]
+permissions:
+  contents: read
+jobs:
+  workflow-validation:
+    if: github.repository == 'ensignwesley/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+          install-bun: "true"
+      - name: Validate all workflows on the frozen proof head before product selection
+        run: pnpm check:workflows
+  owner-static:
+    if: github.repository == 'ensignwesley/openclaw'
+    needs: workflow-validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      OPENCLAW_VITEST_RUNTIME: node
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Extract frozen nine-gate driver and select refreshed independent E2
+        env:
+          PROOF: ${{ github.sha }}
+          TARGET: 8bea1072160b07fda0d9d1215a03739f56114821
+        run: |
+          set -euo pipefail
+          git -c gc.auto=0 show "$PROOF:.github/workflows/proof-lane-e.py" > "$RUNNER_TEMP/e2-owner-static.py"
+          git -c gc.auto=0 checkout --detach "$TARGET"
+          test "$(git -c gc.auto=0 rev-parse HEAD)" = "$TARGET"
+      - uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+          install-bun: "true"
+      - name: Prepare canonical Node Vitest runtime and AI package artifacts
+        run: node scripts/prepare-vitest-runtime.mjs --with-ai-package
+      - name: Retained seven E2 gates plus explicit source linecap and source budget ratchets
+        env:
+          LANE_E_CASE: e2
+          LANE_E_BASE: 58155d2bae4c2581e90fb50a84096d9bc69a8837
+          LANE_E_PROOF: ${{ github.sha }}
+          LANE_E_OUTPUT: ${{ runner.temp }}/e2-owner-static
+        run: python3 "$RUNNER_TEMP/e2-owner-static.py"
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: e2-owner-static
+          path: ${{ runner.temp }}/e2-owner-static/
+  entrypoint:
+    if: github.repository == 'ensignwesley/openclaw'
+    needs: owner-static
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - case: baseline
+            target: 58155d2bae4c2581e90fb50a84096d9bc69a8837
+          - case: candidate
+            target: 8bea1072160b07fda0d9d1215a03739f56114821
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Extract frozen proof driver and select frozen product
+        env:
+          TARGET: ${{ matrix.target }}
+          PROOF: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git -c gc.auto=0 show "$PROOF:.github/workflows/proof-e2-entrypoint.py" > "$RUNNER_TEMP/e2-entrypoint.py"
+          git -c gc.auto=0 checkout --detach "$TARGET"
+          test "$(git -c gc.auto=0 rev-parse HEAD)" = "$TARGET"
+          mkdir -p "$RUNNER_TEMP/e2-entrypoint"
+          git -c gc.auto=0 show -s --format=fuller HEAD > "$RUNNER_TEMP/e2-entrypoint/commit.txt"
+          sha256sum "$RUNNER_TEMP/e2-entrypoint.py" > "$RUNNER_TEMP/e2-entrypoint/driver.sha256"
+      - uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+          install-bun: "true"
+      - name: Add identical read-only observer seams
+        env:
+          TARGET: ${{ matrix.target }}
+          EXPECT: ${{ matrix.case }}
+        run: >-
+          python3 "$RUNNER_TEMP/e2-entrypoint.py" prepare
+          --root "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/e2-entrypoint" --target "$TARGET" --expect "$EXPECT"
+      - name: Fresh full shipped build at frozen product and observer hashes
+        run: |
+          set -euo pipefail
+          pnpm build 2>&1 | tee "$RUNNER_TEMP/e2-entrypoint/full-build.log"
+      - name: Actual shipped local agent and captured provider schema
+        env:
+          TARGET: ${{ matrix.target }}
+          EXPECT: ${{ matrix.case }}
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/e2-entrypoint.py" run --root "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/e2-entrypoint" --target "$TARGET" --expect "$EXPECT" 2>&1 | tee "$RUNNER_TEMP/e2-entrypoint/result.log"
+      - name: Retain bounded proof receipts, not isolated home/state
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: e2-entrypoint-${{ matrix.case }}
+          path: |
+            ${{ runner.temp }}/e2-entrypoint/*.json
+            ${{ runner.temp }}/e2-entrypoint/*.log
+            ${{ runner.temp }}/e2-entrypoint/*.txt
+            ${{ runner.temp }}/e2-entrypoint/*.sha256
+            ${{ runner.temp }}/e2-entrypoint/*.diff
+            ${{ runner.temp }}/e2-entrypoint/*.utf8
+            ${{ runner.temp }}/e2-entrypoint/*.sse
+            ${{ runner.temp }}/e2-entrypoint/cli.stdout
+            ${{ runner.temp }}/e2-entrypoint/cli.stderr
