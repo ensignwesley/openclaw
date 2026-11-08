@@ -1,0 +1,36 @@
+name: E1 reviewer completion regression
+on:
+  push:
+    branches: ["proof/e1-completion-review-20261108"]
+permissions:
+  contents: read
+jobs:
+  regression:
+    if: github.repository == 'ensignwesley/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      OPENCLAW_VITEST_RUNTIME: node
+      NODE_OPTIONS: --max-old-space-size=5120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Save frozen fork-only driver
+        run: cp .github/workflows/proof-e1-completion.py "$RUNNER_TEMP/completion-proof.py"
+      - uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+          install-bun: "true"
+      - name: Validate workflow
+        run: pnpm check:workflows
+      - name: Exact baseline and fixed existing regression
+        run: python3 "$RUNNER_TEMP/completion-proof.py"
+      - uses: actions/upload-artifact@4b7f5dfac1ea60b3e28801c95f6fca70abefa2bb
+        if: always()
+        with:
+          name: e1-completion-regression
+          path: ${{ runner.temp }}/e1-completion-proof/
+          if-no-files-found: error
