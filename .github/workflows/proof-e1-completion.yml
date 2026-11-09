@@ -18,7 +18,9 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - name: Save frozen fork-only driver
-        run: cp .github/workflows/proof-e1-completion.py "$RUNNER_TEMP/completion-proof.py"
+        run: |
+          cp .github/workflows/proof-e1-completion.py "$RUNNER_TEMP/completion-proof.py"
+          cp .github/workflows/proof-e1-errors.mjs "$RUNNER_TEMP/completion-errors.mjs"
       - uses: ./.github/actions/setup-node-env
         with:
           cache-mode: off
