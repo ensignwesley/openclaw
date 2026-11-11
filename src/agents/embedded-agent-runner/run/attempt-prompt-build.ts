@@ -496,6 +496,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
           sessionId: attempt.sessionId,
           sessionTarget: attempt.sessionTarget,
           runId: attempt.runId,
+          internalEvents: attempt.internalEvents,
           agentId: input.sessionAgentId,
           includeEmptySnapshots: input.appendOnlyRuntimeContext === true,
         });

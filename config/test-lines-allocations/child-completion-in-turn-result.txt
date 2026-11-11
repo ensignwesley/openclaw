@@ -1,0 +1,3 @@
+# Exact 70-line regression growth: direct completion preview elision plus fail-open
+# identity controls and mixed pending generations, through existing runtime facts owner.
+70

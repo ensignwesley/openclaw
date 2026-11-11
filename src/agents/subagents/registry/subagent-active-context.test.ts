@@ -7,6 +7,7 @@ import {
 } from "../../../config/runtime-snapshot.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { AgentInternalEvent } from "../../internal-events.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import type { SubagentRunRecordOverrides } from "../../subagent-test-fixtures.test-helpers.js";
 import { buildActiveSubagentRuntimeContext } from "./subagent-active-context.js";
@@ -245,5 +246,74 @@ it.each([
       const visible = outstanding || runId !== continuationRunId;
       expectText(prompt, visible ? results : [], visible ? [] : results);
     }
+  },
+);
+
+it("references only the exact direct completion event while retaining other pending previews", async () => {
+  const childSessionKey = "agent:main:subagent:direct";
+  const runId = "announce:v1:agent:main:subagent:direct:direct-run";
+  seedResult({ runId: "direct-run", childSessionKey, delivery: { status: "in_progress" } });
+  seedResult({ runId: "other-run" });
+  seedResult({ runId: "older-run", childSessionKey });
+  const event: AgentInternalEvent = {
+    type: "task_completion",
+    source: "subagent",
+    childSessionKey,
+    announceType: "subagent task",
+    taskLabel: "task",
+    status: "ok",
+    statusLabel: "completed",
+    result: "child result",
+    replyInstruction: "use result",
+  };
+  const facts = await buildRuntimeFactsContext({
+    cfg: {},
+    sessionKey: parent,
+    agentId: "main",
+    runId,
+    internalEvents: [event],
+    capabilityToolNames: new Set<string>(),
+  });
+  const text = facts.map((fragment) => fragment.text).join("\n");
+  const row = text.split("\n").find((line) => line.includes('run_json="direct-run"'))!;
+  expectText(
+    row,
+    ["delivery=in_progress", "result_source=in_turn_task_completion"],
+    ["result_json=", "child result"],
+  );
+  for (const id of ["other-run", "older-run"]) {
+    expect(text.split("\n").find((line) => line.includes(`run_json="${id}"`))).toContain(
+      'result_json="child result"',
+    );
+  }
+});
+
+it.each(["missing-event", "other-child", "media-event", "retry", "steered", "other-requester"])(
+  "retains the preview when direct completion identity is not proven: %s",
+  async (scenario) => {
+    const childSessionKey = "agent:main:subagent:direct";
+    seedResult({
+      runId: "direct-run",
+      childSessionKey,
+      ...(scenario === "other-requester" ? { requesterSessionKey: "agent:main:other" } : {}),
+    });
+    const event: AgentInternalEvent = {
+      type: "task_completion",
+      source: scenario === "media-event" ? "image_generation" : "subagent",
+      childSessionKey: scenario === "other-child" ? "agent:main:subagent:other" : childSessionKey,
+      announceType: "subagent task",
+      taskLabel: "task",
+      status: "ok",
+      statusLabel: "completed",
+      result: "child result",
+      replyInstruction: "use result",
+    };
+    const runId = "announce:v1:agent:main:subagent:direct:direct-run";
+    const prompt = await promptFor({
+      runId:
+        scenario === "retry" ? runId + ":retry-1" : scenario === "steered" ? "user-turn" : runId,
+      internalEvents: scenario === "missing-event" ? undefined : [event],
+    });
+    expectText(prompt, ['result_json="child result"'], ["result_source=in_turn_task_completion"]);
   },
 );

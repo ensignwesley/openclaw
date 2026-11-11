@@ -1,6 +1,8 @@
 /** Compact current-turn snapshots; instructions belong in the stable system prompt. */
+
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildTemporalContextText } from "./date-time.js";
+import type { AgentInternalEvent } from "./internal-events.js";
 import type { RuntimeContextFragment } from "./internal-runtime-context.js";
 import { buildMediaTaskRuntimeContext } from "./media-generation-task-status.js";
 import type { AgentRunSessionTarget } from "./run-session-target.types.js";
@@ -16,6 +18,7 @@ export async function buildRuntimeFactsContext(
     executionHost?: boolean;
     sessionTarget?: AgentRunSessionTarget;
     runId?: string;
+    internalEvents?: AgentInternalEvent[];
   },
 ): Promise<RuntimeContextFragment[]> {
   const includeEmptySnapshots = params.includeEmptySnapshots === true;
@@ -26,6 +29,7 @@ export async function buildRuntimeFactsContext(
     controllerSessionKey: params.sessionKey,
     controllerAgentId: params.agentId,
     runId: params.runId,
+    internalEvents: params.internalEvents,
     includeSpawnContext: canSpawn,
   });
   if (subagentContext || (canSpawn && includeEmptySnapshots)) {

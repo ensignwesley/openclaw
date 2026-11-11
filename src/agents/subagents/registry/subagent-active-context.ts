@@ -2,6 +2,11 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
+import {
+  buildAnnounceIdFromChildRun,
+  buildAnnounceIdempotencyKey,
+} from "../../announce-idempotency.js";
+import type { AgentInternalEvent } from "../../internal-events.js";
 import { sanitizeForPromptLiteral } from "../../sanitize-for-prompt.js";
 import {
   resolveInternalSessionKey,
@@ -54,7 +59,7 @@ function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
   );
 }
 
-function formatPendingResult(entry: SubagentRunRecord): string {
+function formatPendingResult(entry: SubagentRunRecord, resultInCurrentTurn: boolean): string {
   const result = resolveSubagentCompletionResultText(entry) ?? "";
   return [
     "-",
@@ -64,8 +69,12 @@ function formatPendingResult(entry: SubagentRunRecord): string {
     `delivery=${entry.delivery?.status ?? "pending"};`,
     `requester_continuation=${entry.requesterSettleWake ? "pending" : "none"};`,
     `task_json=${quotePromptData(truncateUtf16Safe(entry.task, 96))};`,
-    `result_json=${sanitizeForPromptLiteral(JSON.stringify(truncateUtf16Safe(result, PENDING_RESULT_MAX_CHARS)))};`,
-    `result_truncated=${result.length > PENDING_RESULT_MAX_CHARS}`,
+    ...(resultInCurrentTurn
+      ? ["result_source=in_turn_task_completion"]
+      : [
+          `result_json=${sanitizeForPromptLiteral(JSON.stringify(truncateUtf16Safe(result, PENDING_RESULT_MAX_CHARS)))};`,
+          `result_truncated=${result.length > PENDING_RESULT_MAX_CHARS}`,
+        ]),
   ].join(" ");
 }
 
@@ -75,6 +84,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
   controllerSessionKey?: string;
   controllerAgentId?: string;
   runId?: string;
+  internalEvents?: AgentInternalEvent[];
   includeSpawnContext?: boolean;
 }): Promise<string | undefined> {
   const rawControllerSessionKey = params.controllerSessionKey?.trim();
@@ -221,7 +231,27 @@ export async function buildActiveSubagentRuntimeContext(params: {
       if (pending.length > 0) {
         sections.push([
           "## Child results awaiting delivery",
-          ...pending.slice(0, PENDING_RESULT_MAX_ENTRIES).map(formatPendingResult),
+          ...pending.slice(0, PENDING_RESULT_MAX_ENTRIES).map((entry) => {
+            // The exact announce turn already carries the result. A matching child
+            // session alone cannot identify retries, steers, or older generations.
+            const resultInCurrentTurn =
+              entry.requesterSessionKey.trim() === controllerSessionKey &&
+              (!entry.requesterAgentId || entry.requesterAgentId === agentId) &&
+              params.runId ===
+                buildAnnounceIdempotencyKey(
+                  buildAnnounceIdFromChildRun({
+                    childSessionKey: entry.childSessionKey,
+                    childRunId: entry.runId,
+                  }),
+                ) &&
+              params.internalEvents?.some(
+                (event) =>
+                  event.type === "task_completion" &&
+                  event.source === "subagent" &&
+                  event.childSessionKey === entry.childSessionKey,
+              ) === true;
+            return formatPendingResult(entry, resultInCurrentTurn);
+          }),
           ...(pending.length > PENDING_RESULT_MAX_ENTRIES
             ? [`- additional_results=${pending.length - PENDING_RESULT_MAX_ENTRIES}`]
             : []),
