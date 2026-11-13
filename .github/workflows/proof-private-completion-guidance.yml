@@ -1,0 +1,64 @@
+name: Private completion delivery guidance baseline proof
+
+on:
+  push:
+    branches: [proof/private-guidance-current-baseline-20261113]
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  OPENCLAW_VITEST_RUNTIME: node
+  PRIVATE_COMPLETION_PROOF_ARTIFACT_DIR: ${{ github.workspace }}/proof-output
+
+jobs:
+  baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+      - name: Bind unchanged production source and frozen fixture
+        run: |
+          set -euo pipefail
+          mkdir -p proof-output
+          test "$(git rev-parse HEAD^)" = d1c800bf95186bff669458310ba3f92e02efb8a6
+          test "$(git diff --name-only HEAD^ HEAD | wc -l)" -eq 2
+          test -z "$(git diff HEAD^ HEAD -- src packages extensions scripts package.json pnpm-lock.yaml)"
+          git rev-parse HEAD HEAD^ > proof-output/commits.txt
+          sha256sum test/gateway-private-completion-guidance.proof.e2e.test.ts > proof-output/fixture.sha256
+          echo "0c01882279f7a89b7bef8fe1fcccbb18d0cb45330f0fe4541032862c187b0098  test/gateway-private-completion-guidance.proof.e2e.test.ts" | sha256sum --check
+      - name: Install pinned dependencies
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack pnpm install --frozen-lockfile 2>&1 | tee proof-output/install.log
+      - name: Fresh shipped Gateway runtime build
+        run: |
+          set -euo pipefail
+          corepack pnpm build:runtime 2>&1 | tee proof-output/build.log
+          sha256sum openclaw.mjs dist/index.* > proof-output/entrypoint.sha256
+      - name: Fixture lint and workflow validation
+        run: |
+          set -euo pipefail
+          node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/gateway-private-completion-guidance.proof.e2e.test.ts 2>&1 | tee proof-output/lint.log
+          node --import ./scripts/tsx.mjs scripts/check-workflows.mts 2>&1 | tee proof-output/workflows.log
+      - name: Actual private announce provider request and ordinary controls
+        run: |
+          set -euo pipefail
+          corepack pnpm test test/gateway-private-completion-guidance.proof.e2e.test.ts --maxWorkers=1 2>&1 | tee proof-output/test.log
+      - name: Preserve terminal evidence including failed baseline
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: private-completion-guidance-baseline
+          path: proof-output/
+          retention-days: 14
+          if-no-files-found: error
