@@ -12,6 +12,7 @@ import {
 } from "../../../packages/ai/src/transports/anthropic-transport-stream.test-support.js";
 import { prepareEmbeddedSessionState } from "../../agents/command/session-preparation.js";
 import { resolveNodeExecEligibilityAsync } from "../../agents/exec-defaults.js";
+import { createReadTool } from "../../agents/sessions/tools/read.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { createComputerTool } from "../../agents/tools/computer-tool.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -74,9 +75,12 @@ it("keeps prior system bytes stable when only remote skill availability changes"
         config: cfg,
         computerExecutionId: "row-a-fixed-computer",
       });
-      const tools = [
-        { name: computer.name, description: computer.description, parameters: computer.parameters },
-      ];
+      const read = createReadTool(workspaceDir);
+      const tools = [computer, read].map(({ name, description, parameters }) => ({
+        name,
+        description,
+        parameters,
+      }));
       const history = [
         {
           role: "user" as const,
@@ -139,9 +143,11 @@ it("keeps prior system bytes stable when only remote skill availability changes"
         const systemPrompt = buildAgentSystemPrompt({
           workspaceDir,
           skillsPrompt: prepared.skillsSnapshot!.prompt,
-          toolNames: [computer.name],
+          toolNames: tools.map((tool) => tool.name),
           runtimeInfo: { agentId: "main", host: "fixed-proof-host", model: model.id },
         });
+        expect(systemPrompt).toContain("## Skills");
+        expect(systemPrompt).toContain("<name>fixed</name>");
         const response = createSseResponse([
           anthropicMessageStart({
             id: "synthetic-response",
@@ -189,7 +195,7 @@ it("keeps prior system bytes stable when only remote skill availability changes"
       const offset = (a: Buffer, b: Buffer) => {
         let i = 0;
         while (i < Math.min(a.length, b.length) && a[i] === b[i]) i++;
-        return i;
+        return i === a.length && i === b.length ? null : i;
       };
       const pairs = [
         [0, 1],
@@ -231,6 +237,7 @@ it("keeps prior system bytes stable when only remote skill availability changes"
       expect(requests[1].payload.tools).toEqual(requests[2].payload.tools);
       // Expected RED on baseline: a live availability note rewrites pre-history system bytes.
       expect(systemBytes(requests[1])).toEqual(systemBytes(requests[0]));
+      expect(systemBytes(requests[2])).toEqual(systemBytes(requests[0]));
     });
   } finally {
     removeRemoteNodeInfo(nodeId);
