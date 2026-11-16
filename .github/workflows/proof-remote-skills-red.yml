@@ -1,0 +1,36 @@
+name: Remote skills RED-only integration
+on:
+  push:
+    branches: [proof/remote-skills-red-20261116]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  red:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Baseline integration, expected to expose unstable serialized system bytes
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-red
+        run: |
+          mkdir -p "$ROW_A_RECEIPTS_DIR"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/tested-head.txt"
+          sha256sum src/skills/runtime/remote-prefix-proof.integration.test.ts > "$ROW_A_RECEIPTS_DIR/harness.sha256"
+          node scripts/run-vitest.mjs src/skills/runtime/remote-prefix-proof.integration.test.ts --maxWorkers=1
+      - name: Preserve raw baseline requests and completions even on RED
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: remote-skills-red-${{ github.sha }}
+          path: ${{ runner.temp }}/row-a-red
+          if-no-files-found: error
+          retention-days: 30
