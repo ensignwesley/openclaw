@@ -211,9 +211,10 @@ it("keeps prior system bytes stable when only remote skill availability changes"
         configureAiTransportHost(syntheticTransportHost);
         const beforeCaptureCount = requests.length;
         guardedFetch.mockImplementationOnce(async (_url: unknown, init: RequestInit) => {
-          expect(typeof init.body).toBe("string");
-          const body = init.body as string;
-          await fs.writeFile(path.join(output, presence + ".request.json"), body);
+          const wireBytes = new Uint8Array(await new Response(init.body).arrayBuffer());
+          const body = new TextDecoder("utf-8", { fatal: true }).decode(wireBytes);
+          expect(Buffer.from(body, "utf8")).toEqual(Buffer.from(wireBytes));
+          await fs.writeFile(path.join(output, presence + ".request.json"), wireBytes);
           requests.push({
             state: presence,
             body,
