@@ -166,7 +166,9 @@ it("durably accounts for a pending assignment across a runtime-version-only chan
   let related: Record<string, unknown[]> = {};
   try {
     coldRows = db
-      .prepare("SELECT * FROM plugin_state_entries WHERE plugin_id='codex' ORDER BY namespace,key")
+      .prepare(
+        "SELECT * FROM plugin_state_entries WHERE plugin_id='codex' ORDER BY namespace,entry_key",
+      )
       .all();
     const names = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table'")
