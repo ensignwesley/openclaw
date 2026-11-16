@@ -1,0 +1,36 @@
+name: Runtime-version inventory RED integration
+on:
+  push:
+    branches: [proof/fingerprint-inventory-red-20261116]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  red:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Real lifecycle and SQLite CAS, synthetic runtime-version change
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          FINGERPRINT_RECEIPTS_DIR: ${{ runner.temp }}/fingerprint-red
+        run: |
+          mkdir -p "$FINGERPRINT_RECEIPTS_DIR"
+          git rev-parse HEAD > "$FINGERPRINT_RECEIPTS_DIR/tested-head.txt"
+          sha256sum extensions/codex/src/app-server/thread-lifecycle.runtime-version-inventory.test.ts > "$FINGERPRINT_RECEIPTS_DIR/harness.sha256"
+          node scripts/run-vitest.mjs extensions/codex/src/app-server/thread-lifecycle.runtime-version-inventory.test.ts --maxWorkers=1
+      - name: Preserve pending inventory, cold state and native RPC evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: fingerprint-red-${{ github.sha }}
+          path: ${{ runner.temp }}/fingerprint-red
+          if-no-files-found: error
+          retention-days: 30

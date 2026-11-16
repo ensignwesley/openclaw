@@ -260,6 +260,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/isolated-completion.native.test.ts",
   "extensions/codex/src/app-server/settled-turn-finalizer.native.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.assignment-rotation.test.ts",
+  "extensions/codex/src/app-server/thread-lifecycle.runtime-version-inventory.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.native.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.handoff.native.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.warm-cleanup.native.test.ts",
