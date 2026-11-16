@@ -41,6 +41,8 @@ export function buildSkillSnapshotProjection(input: SkillSnapshotProjectionInput
   const byName = new Map(resolvedSkills.map((skill) => [skill.name, skill]));
   return {
     prompt: prepared.prompt,
+    catalogPrompt: prepared.catalogPrompt,
+    ...(remoteNote ? { remoteNote } : {}),
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
       source: { filePath: entry.skill.filePath, fileHost: resolveSkillFileHost(entry.skill) },

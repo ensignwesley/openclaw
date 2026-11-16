@@ -218,6 +218,7 @@ async function runEmbeddedAttemptOwned(
     }
     const preparedSkills = await prepare("attempt.skills", () =>
       prepareEmbeddedSkills({
+        separateRemoteNote: true,
         assertCurrent: () => {
           externalAbortController.throwIfFired();
           assertActiveRun?.();
