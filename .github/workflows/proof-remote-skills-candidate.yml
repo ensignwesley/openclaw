@@ -18,13 +18,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          fetch-depth: 0
+          fetch-depth: 1
       - name: Select exact owner base while retaining the same proof harness
         env:
           MODE: ${{ matrix.mode }}
         run: |
           cp src/skills/runtime/remote-prefix-proof.integration.test.ts "$RUNNER_TEMP/proof.test.ts"
           if [ "$MODE" != green ]; then
+            git fetch --no-tags --depth=1 origin 53633171bf52fddf2abe3c5549b97320febb2677
             git checkout --detach 53633171bf52fddf2abe3c5549b97320febb2677
             cp "$RUNNER_TEMP/proof.test.ts" src/skills/runtime/remote-prefix-proof.integration.test.ts
           fi
@@ -45,6 +46,9 @@ jobs:
             node scripts/run-vitest.mjs src/skills/loading/workspace-skill-prompt.test.ts src/skills/loading/workspace-skill-prompt-resolution.test.ts src/agents/embedded-agent-runner/run/attempt-prompt-context.test.ts src/agents/agent-tools.prefix-stability.test.ts --maxWorkers=1
           else
             node scripts/run-vitest.mjs src/skills/runtime/remote-prefix-proof.integration.test.ts --maxWorkers=1
+            if [ "$MODE" = green ]; then
+              node scripts/run-vitest.mjs src/skills/loading/workspace-skill-prompt.test.ts src/skills/loading/workspace-skill-prompt-resolution.test.ts src/agents/embedded-agent-runner/run/attempt-prompt-context.test.ts src/agents/agent-tools.prefix-stability.test.ts --maxWorkers=1
+            fi
           fi
       - name: Preserve proof receipts
         if: always()

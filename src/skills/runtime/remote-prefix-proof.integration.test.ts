@@ -110,6 +110,7 @@ it("keeps prior system bytes stable when only remote skill availability changes"
       const completions: unknown[] = [];
       const stream = createAnthropicMessagesTransportStreamFn();
       for (const presence of ["online-1", "offline", "online-2", "stale-c1-removal", "linux", "no-system-run", "denied"]) {
+        sessionEntry = { ...sessionEntry, permissionMode: presence === "denied" ? "guarded" : "full" };
         const turnCfg: OpenClawConfig = presence === "denied"
           ? { ...cfg, tools: { exec: { host: "node", mode: "deny" } } } : cfg;
         if (presence === "stale-c1-removal") {
@@ -209,6 +210,7 @@ it("keeps prior system bytes stable when only remote skill availability changes"
         guardedFetch.mockImplementationOnce(async (_url: unknown, init: RequestInit) => {
           expect(typeof init.body).toBe("string");
           const body = init.body as string;
+          await fs.writeFile(path.join(output, presence + ".request.json"), body);
           requests.push({
             state: presence,
             body,
