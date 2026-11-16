@@ -54,6 +54,8 @@ it("keeps prior system bytes stable when only remote skill availability changes"
     buildModelFetch,
     guardedFetch,
   });
+  const syntheticTransportHost = getAiTransportHost();
+  vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("Unexpected fetch outside the synthetic provider boundary"); }));
   const nodeId = "row-a-synthetic-mac";
   const runId = "row-a-red";
   try {
@@ -110,9 +112,8 @@ it("keeps prior system bytes stable when only remote skill availability changes"
       const completions: unknown[] = [];
       const stream = createAnthropicMessagesTransportStreamFn();
       for (const presence of ["online-1", "offline", "online-2", "stale-c1-removal", "linux", "no-system-run", "denied"]) {
-        sessionEntry = { ...sessionEntry, permissionMode: presence === "denied" ? "guarded" : "full" };
         const turnCfg: OpenClawConfig = presence === "denied"
-          ? { ...cfg, tools: { exec: { host: "node", mode: "deny" } } } : cfg;
+          ? { ...cfg, gateway: { nodes: { commands: { deny: ["system.run"] } } } } : cfg;
         if (presence === "stale-c1-removal") {
           expect(removeRemoteNodeInfoForConnection(nodeId, "c1")).toBe(false);
         } else if (presence === "offline") {
@@ -207,6 +208,8 @@ it("keeps prior system bytes stable when only remote skill availability changes"
           { type: "message_stop" },
         ]);
         responses.push(await response.clone().text());
+        configureAiTransportHost(syntheticTransportHost);
+        const beforeCaptureCount = requests.length;
         guardedFetch.mockImplementationOnce(async (_url: unknown, init: RequestInit) => {
           expect(typeof init.body).toBe("string");
           const body = init.body as string;
@@ -221,8 +224,7 @@ it("keeps prior system bytes stable when only remote skill availability changes"
           });
           return response;
         });
-        completions.push(
-          await stream(
+        const completion = await stream(
             model,
             { systemPrompt, messages: modelMessages, tools },
             {
@@ -230,8 +232,11 @@ it("keeps prior system bytes stable when only remote skill availability changes"
               cacheRetention: "long",
               sessionId: sessionEntry.sessionId,
             },
-          ).result(),
-        );
+          ).result();
+        completions.push(completion);
+        await fs.writeFile(path.join(output, "completions.json"), JSON.stringify(completions, null, 2));
+        expect(completion.stopReason, JSON.stringify(completion)).not.toBe("error");
+        expect(requests.length, "real transport must reach exactly one synthetic fetch per turn").toBe(beforeCaptureCount + 1);
       }
       expect(requests).toHaveLength(7);
       for (const request of requests)
@@ -314,6 +319,7 @@ it("keeps prior system bytes stable when only remote skill availability changes"
     await closeSkillsWatchers();
     configureAiTransportHost(originalHost);
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   }
 }, 60_000);
