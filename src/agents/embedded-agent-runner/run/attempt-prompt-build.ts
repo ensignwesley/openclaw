@@ -395,7 +395,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   appendOnlyRuntimeContext?: boolean;
   executionHost?: boolean;
   inHistorySystemUpdates?: boolean;
-  attempt: PromptContextAttempt & Partial<Pick<EmbeddedRunAttemptParams, "admittedRunContext">>;
+  attempt: PromptContextAttempt & Partial<Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "skillsSnapshot">>;
   capabilityToolNames: ReadonlySet<string>;
   boundaryTimezone?: string;
   includeBoundaryTimestamp: boolean;
@@ -534,6 +534,13 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       kind: "conversation-data",
       text: buildActiveNodeContextText(profileId),
     });
+    const snapshot = attempt.skillsSnapshot;
+    if (snapshot?.nodeSkillsEligibility?.canExec && input.capabilityToolNames.has("read")) {
+      activeNodeFragments.push({
+        kind: "conversation-data",
+        text: snapshot.remoteNote ?? "Remote macOS execution is unavailable for this turn.",
+      });
+    }
   }
   const contextFragments = [
     ...fragments,

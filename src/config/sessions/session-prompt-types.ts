@@ -10,6 +10,10 @@ export type SessionSkillPromptRef = {
 export type SessionSkillSnapshot = {
   librarySelections?: import("../../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
   prompt: string;
+  /** Catalog-only projection; legacy consumers retain the composed prompt. */
+  catalogPrompt?: string;
+  /** Current admitted remote availability, never part of the embedded system prefix. */
+  remoteNote?: string;
   /** Persisted stores may replace large duplicate prompts with a content-addressed blob ref. */
   promptRef?: SessionSkillPromptRef;
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;

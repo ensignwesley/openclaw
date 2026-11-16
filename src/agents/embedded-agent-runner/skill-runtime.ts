@@ -22,6 +22,7 @@ import { prepareRuntimeSkillEntries } from "./skills-prompt.js";
 export async function prepareEmbeddedSkills(params: {
   /** Prompt-only callers can skip process-wide environment overrides. */
   applySkillEnvironment?: boolean;
+  separateRemoteNote?: boolean;
   assertCurrent?: () => void;
   attempt: Pick<
     EmbeddedRunAttemptParams,
@@ -100,6 +101,7 @@ export async function prepareEmbeddedSkills(params: {
       }));
     const [skillsPrompt, libraryEntries] = await settleCurrentReadPreparations([
       resolveSkillsPrompt({
+        separateRemoteNote: params.separateRemoteNote,
         assertCurrent: params.assertCurrent,
         contextTokenBudget: params.attempt.contextTokenBudget,
         skillsSnapshot,

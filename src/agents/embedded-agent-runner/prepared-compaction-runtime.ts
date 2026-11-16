@@ -132,6 +132,7 @@ export async function buildPreparedCompactionRuntime(
 
   try {
     const preparedSkills = await prepareEmbeddedSkills({
+      separateRemoteNote: true,
       assertCurrent: () => params.abortSignal?.throwIfAborted(),
       attempt: {
         config: params.config,

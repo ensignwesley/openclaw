@@ -28,6 +28,7 @@ export function formatSkillsForPromptBounded(params: SkillsPromptParams): string
 /** Keep resource selection tied to the exact catalog admitted by the prompt budget. */
 export function prepareSkillsForPrompt(params: SkillsPromptParams): {
   prompt: string;
+  catalogPrompt: string;
   skills: Skill[];
 } {
   const maxSkillsInPrompt = params.maxSkillsInPrompt ?? DEFAULT_MAX_SKILLS_IN_PROMPT;
@@ -43,6 +44,7 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
     skills: Skill[],
     format: SkillsPromptFormat,
     includeLimitNote = true,
+    includeRemoteNote = true,
   ): string | undefined => {
     // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
     // The production-renderer parity test in src/agents/code-mode.skills.test.ts enforces this coupling.
@@ -70,6 +72,7 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
     // Reuse the catalog and limit notice when the optional remote note does not fit.
     const prompt = [limitNote, catalog].filter(Boolean).join("\n");
     if (
+      includeRemoteNote &&
       params.remoteNote &&
       params.remoteNote.length + prompt.length + (prompt ? 1 : 0) <= maxSkillsPromptChars
     ) {
@@ -90,6 +93,7 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
   if (fullPrompt !== undefined) {
     return {
       prompt: fullPrompt,
+      catalogPrompt: renderWithinLimit(skillsForPrompt, { kind: "full" }, true, false)!,
       skills: skillsForPrompt,
     };
   }
@@ -104,7 +108,11 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
   if (skillsForPrompt.length === 0 && byCount.length > 0) {
     const fullWithoutNotice = renderWithinLimit(byCount, { kind: "full" }, false);
     if (fullWithoutNotice !== undefined) {
-      return { prompt: fullWithoutNotice, skills: byCount };
+      return {
+        prompt: fullWithoutNotice,
+        catalogPrompt: renderWithinLimit(byCount, { kind: "full" }, false, false)!,
+        skills: byCount,
+      };
     }
     const count = largestFittingValue(0, byCount.length, (candidateCount) =>
       fitsCompact(byCount.slice(0, candidateCount), 0, false),
@@ -132,5 +140,11 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
       { kind: "compact", descriptionMaxChars },
       includeLimitNote,
     ) ?? "";
-  return { prompt, skills: prompt ? skillsForPrompt : [] };
+  return {
+    prompt,
+    catalogPrompt: renderWithinLimit(
+      skillsForPrompt, { kind: "compact", descriptionMaxChars }, includeLimitNote, false,
+    ) ?? "",
+    skills: prompt ? skillsForPrompt : [],
+  };
 }

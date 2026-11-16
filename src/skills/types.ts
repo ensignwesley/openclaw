@@ -131,11 +131,15 @@ export type SkillEligibilityContext = {
   };
 };
 
-export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 8;
+export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 9;
 
 export type SkillSnapshot = {
   librarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
   prompt: string;
+  /** Catalog-only projection; legacy consumers retain the composed prompt. */
+  catalogPrompt?: string;
+  /** Current admitted remote availability, never part of the embedded system prefix. */
+  remoteNote?: string;
   /** Complete eligible sync identities, including skills hidden from the model prompt. */
   skills: Array<{
     name: string;
