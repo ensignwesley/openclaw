@@ -1,0 +1,72 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { expect, it, vi } from "vitest";
+import { prepareEmbeddedSessionState } from "../../agents/command/session-preparation.js";
+import { prepareEmbeddedSkills } from "../../agents/embedded-agent-runner/skill-runtime.js";
+import { prepareEmbeddedAttemptPromptContext } from "../../agents/embedded-agent-runner/run/attempt-prompt-build.js";
+import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { getAgentRunLifecycleGeneration, clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { recordRemoteNodeInfo, removeRemoteNodeInfo, setSkillsRemoteRegistry } from "./remote.js";
+import { testRemoteSession, setTestSkillsRemoteRegistry } from "./remote.test-helpers.js";
+import { closeSkillsWatchers } from "./refresh.js";
+
+async function prepareCase(legacy: boolean, capabilities: string[]) {
+  const id = "review-synthetic-mac";
+  const runId = "review-remote-note";
+  try {
+    return await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", path.join(state.root, "empty-skills"));
+      vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(state.root, "empty-plugins"));
+      const workspace = state.workspaceDir;
+      await fs.mkdir(path.join(workspace, "skills", "fixed"), { recursive: true });
+      await fs.writeFile(path.join(workspace, "skills", "fixed", "SKILL.md"), "---\nname: fixed\ndescription: Fixed skill\n---\nInstructions.\n");
+      const config: OpenClawConfig = { agents: { defaults: { workspace } }, plugins: { enabled: false }, tools: { exec: { host: "node", mode: "full" } } };
+      setRuntimeConfigSnapshot(config);
+      const connected = testRemoteSession(id, { connId: "review-c1", displayName: "Review Mac", platform: "darwin", commands: ["system.run"] });
+      setTestSkillsRemoteRegistry(id, { get: () => connected });
+      recordRemoteNodeInfo(connected);
+      const sessionEntry: SessionEntry = { sessionId: runId, updatedAt: 1, permissionMode: "full" };
+      const admitted = await prepareEmbeddedSessionState({ cfg: config, opts: { message: "Review" }, sessionEntry, sessionKey: "agent:main:review-note", sessionId: runId, storePath: path.join(state.root, "sessions.json"), sessionAgentId: "main", lifecycleGeneration: getAgentRunLifecycleGeneration(), runId, executionWorkspaceDir: workspace, watchSkills: false, isNewSession: false, isSubagentLaneTurn: false, suppressVisibleSessionEffects: true, sessionStateActor: { actorType: "agent" } });
+      const snapshot = structuredClone(admitted.skillsSnapshot!);
+      expect(snapshot.remoteNote).toContain("Remote macOS node available");
+      expect(snapshot.nodeSkillsEligibility?.canExec).toBe(true);
+      if (legacy) {
+        snapshot.promptFormatVersion = 8;
+        delete snapshot.remoteNote;
+        delete snapshot.catalogPrompt;
+      }
+      const attempt = { config, skillsSnapshot: snapshot, sessionId: runId, sessionKey: "agent:main:review-note", contextTokenBudget: 32000 };
+      const prepared = await prepareEmbeddedSkills({ separateRemoteNote: true, applySkillEnvironment: false, includeCodeModeSkills: true, attempt, effectiveWorkspace: workspace, sandbox: undefined, sessionAgentId: "main" });
+      expect(prepared.skillsPrompt).toContain("<name>fixed</name>");
+      expect(prepared.skillsPrompt).not.toContain("Remote macOS node available");
+      const systemPrompt = buildAgentSystemPrompt({ workspaceDir: workspace, skillsPrompt: prepared.skillsPrompt, toolNames: capabilities, runtimeInfo: { agentId: "main", host: "fixed", model: "fixture/model" } });
+      expect(systemPrompt).toContain("<name>fixed</name>");
+      const context = await prepareEmbeddedAttemptPromptContext({ attempt, capabilityToolNames: new Set(capabilities), includeBoundaryTimestamp: false, isRawModelRun: false, messages: [], prompt: { effectivePrompt: "Review", effectiveTranscriptPrompt: "Review" }, replaceSessionMessages: () => {}, sessionAgentId: "main", systemPromptText: systemPrompt, toolResultPromptProjectionState: { replacements: new Map(), frozen: new Set(), ambiguousBaseKeys: new Set(), restoredCacheTtl: new Map(), sourceHashByKey: new Map() } });
+      return { turn: JSON.stringify(context.hookMessagesForCurrentPrompt), legacy, preparedNote: prepared.skillsSnapshotForRun?.remoteNote };
+    });
+  } finally {
+    removeRemoteNodeInfo(id);
+    setSkillsRemoteRegistry(null);
+    clearAgentRunContext(runId);
+    await closeSkillsWatchers();
+    clearRuntimeConfigSnapshot();
+    vi.unstubAllEnvs();
+  }
+}
+
+it("retains connected Mac availability when a persisted v8 catalog is rebuilt", async () => {
+  const result = await prepareCase(true, ["read", "computer"]);
+  if (process.env.ROW_A_RECEIPTS_DIR) await fs.writeFile(path.join(process.env.ROW_A_RECEIPTS_DIR, "legacy-case.json"), JSON.stringify(result, null, 2));
+  expect(result.turn).toContain("Remote macOS node available");
+  expect(result.turn).not.toContain("Remote macOS execution is unavailable");
+});
+
+it("retains connected Mac availability with installed skill access but no read tool", async () => {
+  const result = await prepareCase(false, ["skills_read", "skills_search", "computer"]);
+  if (process.env.ROW_A_RECEIPTS_DIR) await fs.writeFile(path.join(process.env.ROW_A_RECEIPTS_DIR, "installed-reader-case.json"), JSON.stringify(result, null, 2));
+  expect(result.turn).toContain("Remote macOS node available");
+});

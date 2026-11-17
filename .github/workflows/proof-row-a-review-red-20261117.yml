@@ -1,0 +1,43 @@
+name: Row A source review regressions RED
+on:
+  push:
+    branches: [proof/row-a-review-red-20261117]
+permissions:
+  contents: read
+jobs:
+  regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Select exact product-only owners with unchanged capture harness
+        run: |
+          cp src/skills/runtime/remote-note-review.integration.test.ts "$RUNNER_TEMP/proof.test.ts"
+          git fetch --no-tags --depth=1 origin fe291424d6b12c4c84962e55e92ce875c78bb2ea
+          git checkout --detach fe291424d6b12c4c84962e55e92ce875c78bb2ea
+          cp "$RUNNER_TEMP/proof.test.ts" src/skills/runtime/remote-note-review.integration.test.ts
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Regression failures on frozen product
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-review-red
+        run: |
+          mkdir -p "$ROW_A_RECEIPTS_DIR"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
+          sha256sum src/skills/runtime/remote-note-review.integration.test.ts > "$ROW_A_RECEIPTS_DIR/harness.sha256"
+          set -o pipefail
+          node scripts/run-vitest.mjs src/skills/runtime/remote-note-review.integration.test.ts --maxWorkers=1 2>&1 | tee "$ROW_A_RECEIPTS_DIR/vitest.log"
+      - name: Preserve receipts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: row-a-review-red-${{ github.sha }}
+          path: ${{ runner.temp }}/row-a-review-red
+          if-no-files-found: error
+          retention-days: 30
