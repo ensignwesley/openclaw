@@ -1,0 +1,35 @@
+name: Row A product formatting artifact
+on:
+  push:
+    branches: [proof/row-a-format-20261117]
+permissions:
+  contents: read
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          ref: fe291424d6b12c4c84962e55e92ce875c78bb2ea
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Format only the candidate files; preserve an inspectable patch
+        run: |
+          mkdir -p "$RUNNER_TEMP/row-a-format"
+          git rev-parse HEAD > "$RUNNER_TEMP/row-a-format/product-head.txt"
+          mapfile -t files < <(git diff --name-only HEAD^ HEAD -- '*.ts')
+          corepack pnpm exec oxfmt --write "${files[@]}"
+          git diff --binary -- "${files[@]}" > "$RUNNER_TEMP/row-a-format/format.patch"
+          corepack pnpm exec oxfmt --check "${files[@]}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: row-a-format-fe291424d6b12c4c84962e55e92ce875c78bb2ea
+          path: ${{ runner.temp }}/row-a-format
+          if-no-files-found: error
+          retention-days: 30
