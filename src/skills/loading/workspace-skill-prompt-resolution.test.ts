@@ -63,6 +63,29 @@ function markUnavailable(skillKey: string) {
 }
 
 describe("resolveSkillsPrompt", () => {
+  it.each([
+    { label: "full", count: 1, maxChars: 10000, maxCount: 10 },
+    { label: "compact", count: 10, maxChars: 1800, maxCount: 10 },
+    { label: "truncated", count: 10, maxChars: 1800, maxCount: 2 },
+    { label: "note-too-small", count: 1, maxChars: 80, maxCount: 10 },
+  ])("keeps catalog-only and legacy parser resources equal via the real renderer: $label", async ({ count, maxChars, maxCount }) => {
+    const entries = Array.from({ length: count }, (_, index) => createEntry(`skill-${index}`, "Stable guidance. ".repeat(100)));
+    const snapshot = await buildSkillSnapshot(promptWorkspace, {
+      entries,
+      config: { skills: { limits: { maxSkillsPromptChars: maxChars, maxSkillsInPrompt: maxCount } } },
+      eligibility: { nodeSkills: { canExec: true }, remote: {
+        note: "Remote macOS node available (Parity Mac). Run macOS-only skills via exec host=node on that node.",
+        platforms: ["darwin"], hasBin: () => false, hasAnyBin: () => false,
+      } },
+    });
+    const legacy = resolveCodeModeSkills({ skillsPrompt: snapshot.prompt, candidates: snapshot.resolvedSkills! });
+    const catalog = await resolve({ skillsSnapshot: snapshot, separateRemoteNote: true });
+    expect(catalog).not.toContain("Remote macOS node available");
+    expect(resolveCodeModeSkills({ skillsPrompt: catalog, candidates: snapshot.resolvedSkills! })).toEqual(legacy);
+    expect(snapshot.catalogPrompt?.trim()).toBe(catalog);
+    if (maxChars > 80) expect(legacy.length).toBeGreaterThan(0);
+  });
+
   it("compacts descriptions without changing admitted skill resources", async () => {
     const entries = Array.from({ length: 24 }, (_, index) => {
       const entry = createEntry(`skill-${index}`);

@@ -516,6 +516,7 @@ async function runEmbeddedAttemptOwned(
         runAbortController,
         externalAbortController,
         prepared: {
+          skills: preparedSkills,
           bootstrap: preparedBootstrap,
           bundleTools: preparedBundleTools,
           sessionRuntime: preparedSessionRuntime,

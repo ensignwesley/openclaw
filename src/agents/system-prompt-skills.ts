@@ -2,6 +2,19 @@ import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { parseSkillsPromptCatalog } from "../skills/loading/skill-prompt-catalog.js";
 import { TOOL_CALL_RAW_TOOL_NAME } from "./tool-catalog.js";
 
+/** Shared admission rule for catalog text and its current-turn availability fact. */
+export function canAccessSkills(params: {
+  codeModeActive?: boolean;
+  availableTools: Pick<ReadonlySet<string>, "has">;
+  visibleTools: Pick<ReadonlySet<string>, "has">;
+  promptSurface?: AgentPromptSurfaceKind;
+}) {
+  const installedSkillRead = params.availableTools.has("skills_read");
+  return params.codeModeActive
+    ? params.visibleTools.has("exec") && installedSkillRead
+    : params.visibleTools.has("read") || installedSkillRead || params.promptSurface === "cli_backend";
+}
+
 export function buildSkillsSection(params: {
   skillsPrompt?: string;
   readToolName: string;
@@ -14,9 +27,7 @@ export function buildSkillsSection(params: {
   const { availableTools, visibleTools } = params;
   const installedSkillRead = availableTools.has("skills_read");
   // CLI backends own native file tools outside OpenClaw's projected tool list.
-  const canAccess = params.codeModeActive
-    ? visibleTools.has("exec") && installedSkillRead
-    : visibleTools.has("read") || installedSkillRead || params.promptSurface === "cli_backend";
+  const canAccess = canAccessSkills(params);
   const installedSkillSearch = availableTools.has("skills_search");
   // Code Mode searches the admitted skill catalog; listing it again only consumes context.
   const skillsPrompt =

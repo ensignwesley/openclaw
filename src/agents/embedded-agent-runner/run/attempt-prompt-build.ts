@@ -37,6 +37,8 @@ import {
   appendModelIdentitySystemPrompt,
   buildModelIdentityPromptLine,
 } from "../../system-prompt.js";
+import { canAccessSkills } from "../../system-prompt-skills.js";
+import type { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { log } from "../logger.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import {
@@ -397,6 +399,9 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   inHistorySystemUpdates?: boolean;
   attempt: PromptContextAttempt & Partial<Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "skillsSnapshot">>;
   capabilityToolNames: ReadonlySet<string>;
+  visibleToolNames?: ReadonlySet<string>;
+  codeModeActive?: boolean;
+  preparedSkills?: Pick<Awaited<ReturnType<typeof prepareEmbeddedSkills>>, "skillsSnapshotForRun">;
   boundaryTimezone?: string;
   includeBoundaryTimestamp: boolean;
   isRawModelRun: boolean;
@@ -534,8 +539,14 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       kind: "conversation-data",
       text: buildActiveNodeContextText(profileId),
     });
-    const snapshot = attempt.skillsSnapshot;
-    if (snapshot?.nodeSkillsEligibility?.canExec && input.capabilityToolNames.has("read")) {
+    const snapshot = input.preparedSkills
+      ? input.preparedSkills.skillsSnapshotForRun
+      : attempt.skillsSnapshot;
+    if (snapshot?.nodeSkillsEligibility?.canExec && canAccessSkills({
+      availableTools: input.capabilityToolNames,
+      visibleTools: input.visibleToolNames ?? input.capabilityToolNames,
+      codeModeActive: input.codeModeActive,
+    })) {
       activeNodeFragments.push({
         kind: "conversation-data",
         text: snapshot.remoteNote ?? "Remote macOS execution is unavailable for this turn.",

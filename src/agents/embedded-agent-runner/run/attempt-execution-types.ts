@@ -1,3 +1,4 @@
+import type { prepareEmbeddedSkills } from "../skill-runtime.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -33,6 +34,7 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     "setCompactionState" | "setRunAbort"
   >;
   prepared: {
+    skills?: Prepared<typeof prepareEmbeddedSkills>;
     bootstrap: Prepared<typeof prepareEmbeddedAttemptBootstrap>;
     bundleTools: Prepared<typeof prepareEmbeddedAttemptBundleTools>;
     sessionRuntime: Prepared<typeof prepareEmbeddedAttemptSessionRuntime>;

@@ -47,7 +47,7 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
     includeRemoteNote = true,
   ): string | undefined => {
     // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
-    // The production-renderer parity test in src/agents/code-mode.skills.test.ts enforces this coupling.
+    // The real-renderer projection parity cases in src/skills/loading/workspace-skill-prompt-resolution.test.ts enforce this coupling.
     const truncated = skills.length < total;
     let limitNote = "";
     if (includeLimitNote) {

@@ -224,6 +224,9 @@ export async function runEmbeddedAttemptPromptPhase(
     const promptContext = await prepareEmbeddedAttemptPromptContext({
       sessionVersion: sessionManager.getHeader()?.version,
       attempt,
+      preparedSkills: prepared.skills,
+      visibleToolNames: new Set(promptToolPolicy.current.effectiveTools.map((tool) => tool.name)),
+      codeModeActive: prepared.toolBase.codeModeControlsEnabledForRun,
       systemPromptRuntimeContextFragments: prepared.systemPrompt.runtimeContextFragments,
       capabilityToolNames: prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames,
       messages: activeSession.messages,
