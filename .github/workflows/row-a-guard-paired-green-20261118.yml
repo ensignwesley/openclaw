@@ -1,0 +1,62 @@
+name: Row A corrected real CLI and Codex legacy controls
+on:
+  push:
+    branches: [proof/row-a-guard-paired-green-20261118]
+defaults:
+  run:
+    shell: bash
+permissions:
+  contents: read
+jobs:
+  controls:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Save exact corrected harness and fetch both owners
+        run: |
+          cp src/skills/runtime/remote-prefix-proof.integration.test.ts "$RUNNER_TEMP/corrected-proof.ts"
+          git fetch --no-tags --depth=1 origin 53633171bf52fddf2abe3c5549b97320febb2677 dc914df0d5f60d29c4451692565d5901839529f6
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Capture resolved baseline controls; prefix oracle is expected RED
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-guard-paired/base
+        run: |
+          git checkout --detach 53633171bf52fddf2abe3c5549b97320febb2677
+          cp "$RUNNER_TEMP/corrected-proof.ts" src/skills/runtime/remote-prefix-proof.integration.test.ts
+          mkdir -p "$ROW_A_RECEIPTS_DIR"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
+          set +e
+          node scripts/run-vitest.mjs src/skills/runtime/remote-prefix-proof.integration.test.ts --maxWorkers=1 > "$ROW_A_RECEIPTS_DIR/test.log" 2>&1
+          baseline_status=$?
+          set -e
+          echo "$baseline_status" > "$ROW_A_RECEIPTS_DIR/test.exit"
+          if [ "$baseline_status" != 1 ]; then cat "$ROW_A_RECEIPTS_DIR/test.log"; exit 1; fi
+          node --input-type=module -e 'import fs from "node:fs"; const p=process.env.ROW_A_RECEIPTS_DIR; const c=JSON.parse(fs.readFileSync(p+"/legacy-controls.json")); const o=JSON.parse(fs.readFileSync(p+"/observations.json")); if(c.length!==28||c.some(x=>typeof x.cli!=="string"||!x.cli)||o.requests.length!==7||!o.pairs.some(x=>x.systemFirstDifferingByte!==null))throw Error("Unqualified baseline control");'
+      - name: Capture corrected candidate controls and prove actual equality
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-guard-paired/candidate
+        run: |
+          git checkout --detach dc914df0d5f60d29c4451692565d5901839529f6
+          cp "$RUNNER_TEMP/corrected-proof.ts" src/skills/runtime/remote-prefix-proof.integration.test.ts
+          mkdir -p "$ROW_A_RECEIPTS_DIR"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
+          node scripts/run-vitest.mjs src/skills/runtime/separated-recovery.integration.test.ts src/skills/runtime/sandbox-v8-library.integration.test.ts src/gateway/worker-environments/worker-skill-prefix.integration.test.ts src/gateway/worker-environments/skill-resource-transfer.test.ts src/skills/runtime/sandbox-catalog.integration.test.ts src/agents/embedded-agent-runner/sandbox-skills.test.ts src/skills/runtime/remote-note-review.integration.test.ts src/skills/loading/workspace-skill-prompt-resolution.test.ts --maxWorkers=1 2>&1 | tee "$ROW_A_RECEIPTS_DIR/focused.log"
+          node scripts/run-vitest.mjs src/skills/runtime/remote-prefix-proof.integration.test.ts --maxWorkers=1 2>&1 | tee "$ROW_A_RECEIPTS_DIR/test.log"
+          node --input-type=module -e 'import fs from "node:fs"; const p=process.env.ROW_A_RECEIPTS_DIR; const a=fs.readFileSync(p+"/../base/legacy-controls.json");const b=fs.readFileSync(p+"/legacy-controls.json");const c=JSON.parse(b);fs.writeFileSync(p+"/comparison.json",JSON.stringify({count:c.length,cliResolved:c.every(x=>typeof x.cli==="string"&&x.cli.length>0),byteIdentical:a.equals(b)},null,2));if(c.length!==28||c.some(x=>typeof x.cli!=="string"||!x.cli)||!a.equals(b))throw Error("Legacy bytes changed: STOP, do not proceed to B");'
+      - name: Preserve full control evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: row-a-guard-paired-${{ github.sha }}
+          path: ${{ runner.temp }}/row-a-guard-paired
+          if-no-files-found: error
+          retention-days: 30
