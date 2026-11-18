@@ -5,7 +5,7 @@ import {
   SKILL_LIBRARY_MAX_PATH_COMPONENTS,
 } from "../../skills/library/bundle.js";
 import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
-import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
+import { reprojectSkillSnapshot } from "../../skills/loading/skill-snapshot-reprojection.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
 import { clearSkillFileHost } from "../../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -295,18 +295,20 @@ export async function transferSkillResources(params: {
     check();
     return {
       source: params.snapshot,
-      snapshot: {
-        ...params.snapshot,
-        skills,
+      snapshot: reprojectSkillSnapshot(
+        {
+          ...params.snapshot,
+          skills,
+          resolvedSkills,
+          discoverySkills: [
+            ...deliveredSkills.filter((skill) => !skill.disableModelInvocation),
+            ...(params.snapshot.discoverySkills ?? resolvedSkills).filter(
+              (skill) => skill.filePath.startsWith("node://") && !skill.disableModelInvocation,
+            ),
+          ],
+        },
         resolvedSkills,
-        discoverySkills: [
-          ...deliveredSkills.filter((skill) => !skill.disableModelInvocation),
-          ...(params.snapshot.discoverySkills ?? resolvedSkills).filter(
-            (skill) => skill.filePath.startsWith("node://") && !skill.disableModelInvocation,
-          ),
-        ],
-        prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
-      },
+      ),
       mounts,
       assertCurrent: check,
       cleanup,

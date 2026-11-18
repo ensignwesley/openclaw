@@ -630,6 +630,7 @@ export const gatewayServerSerialTestFiles = [
 
 // Canonical file ownership for the non-isolated Gateway server Vitest project.
 export const gatewayServerBackedHttpTestFiles = [
+  "src/gateway/worker-environments/worker-skill-prefix.integration.test.ts",
   "src/gateway/embeddings-http.test.ts",
   "src/gateway/models-http.test.ts",
   "src/gateway/openai-http.test.ts",

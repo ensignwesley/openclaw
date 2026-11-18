@@ -7,7 +7,7 @@ import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
 import { MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS } from "../../shared/sandbox-workspace-paths.js";
 import { resolveExplicitSkillSelectionFileHost } from "../../skills/discovery/skill-command-provenance.js";
-import { prepareSkillsForPrompt } from "../../skills/loading/skill-prompt-limits.js";
+import { reprojectSkillSnapshot } from "../../skills/loading/skill-snapshot-reprojection.js";
 import { clearSkillFileHost } from "../../skills/skill-file-host.js";
 import type {
   SkillEligibilityContext,
@@ -191,17 +191,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
       if (!resolvedSkills) {
         throw new Error("Selected skill snapshot must be hydrated before sandbox delivery.");
       }
-      const { prompt, catalogPrompt } = prepareSkillsForPrompt({
-        skills: resolvedSkills,
-        preserveOrder: true,
-      });
-      selectedSnapshot = {
-        ...snapshot,
-        resolvedSkills,
-        discoverySkills,
-        prompt,
-        catalogPrompt,
-      };
+      selectedSnapshot = reprojectSkillSnapshot({ ...snapshot, discoverySkills }, resolvedSkills);
     }
     return {
       ...(params.sandbox.skillsEligibility
