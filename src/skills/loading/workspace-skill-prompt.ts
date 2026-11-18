@@ -7,6 +7,10 @@ import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { hasUnavailableSkillSecretOwners, isSkillSecretOwnerUnavailable } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { compactSkillsPromptForContext, escapeSkillXml } from "./skill-contract.js";
+import {
+  hasCurrentSkillSnapshotProjection,
+  reprojectSkillSnapshot,
+} from "./skill-snapshot-reprojection.js";
 import { resolveWorkspaceSkillPromptEntries } from "./workspace-skill-loader.js";
 
 const skillsLogger = createSubsystemLogger("skills");
@@ -60,6 +64,7 @@ export async function buildSkillSnapshot(
 
 type ResolveSkillsPromptParams = {
   separateRemoteNote?: boolean;
+  onLegacyPromptFallback?: () => void;
   contextTokenBudget?: number;
   skillsSnapshot?: SkillSnapshot;
   entries?: SkillEntry[];
@@ -106,9 +111,37 @@ async function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): Pr
   if (
     params.separateRemoteNote &&
     params.skillsSnapshot &&
-    params.skillsSnapshot.catalogPrompt === undefined
+    !hasCurrentSkillSnapshotProjection(params.skillsSnapshot)
   ) {
-    return rebuildAfterUnsafeSnapshot(params, "unsupported-prompt-format");
+    const snapshot = params.skillsSnapshot;
+    try {
+      if (snapshot.resolvedSkills !== undefined) {
+        const remoteNote = params.eligibility
+          ? params.eligibility.remote?.note
+          : snapshot.remoteNote;
+        const projected = reprojectSkillSnapshot(
+          { ...snapshot, remoteNote },
+          snapshot.resolvedSkills,
+          {
+            config: params.config,
+            agentId: params.agentId,
+            remoteNote,
+          },
+        );
+        return await resolveSkillsPromptCatalog({ ...params, skillsSnapshot: projected });
+      }
+      const entries = params.entries ?? (await params.loadEntries?.());
+      if (entries !== undefined) return await buildSkillsPromptFromEntries(params, entries);
+    } catch {
+      // Do not turn lost read authority into permission to use a retained prompt.
+      params.assertCurrent?.();
+    }
+    params.assertCurrent?.();
+    params.onLegacyPromptFallback?.();
+    skillsLogger.warn(
+      "Using legacy skills prompt for this turn; separated projection unavailable.",
+    );
+    return resolveSkillsPromptCatalog({ ...params, separateRemoteNote: false });
   }
   const snapshotPrompt = (
     params.separateRemoteNote ? params.skillsSnapshot?.catalogPrompt : params.skillsSnapshot?.prompt

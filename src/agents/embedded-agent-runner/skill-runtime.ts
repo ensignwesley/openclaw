@@ -1,6 +1,11 @@
 import path from "node:path";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { prepareSkillLibrarySelection } from "../../skills/library/selection.js";
+import {
+  hasCurrentSkillSnapshotProjection,
+  reprojectSkillSnapshot,
+} from "../../skills/loading/skill-snapshot-reprojection.js";
 import {
   buildSkillSnapshot,
   resolveSkillsPrompt,
@@ -11,7 +16,6 @@ import {
 } from "../../skills/runtime/env-overrides.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
-import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../../skills/types.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { prepareInstalledSkillCatalog } from "../installed-skill-runtime.js";
 import type { SandboxContext } from "../sandbox/types.js";
@@ -19,6 +23,8 @@ import { resolveSessionSkillResourceSnapshot } from "../session-placement-skill-
 import { isToolExecutionAllowed } from "../tool-policy-shared.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 import { prepareRuntimeSkillEntries } from "./skills-prompt.js";
+
+const skillsLogger = createSubsystemLogger("skills");
 
 /** Prepares readable skills and owns environment rollback until the caller takes custody. */
 export async function prepareEmbeddedSkills(params: {
@@ -59,6 +65,7 @@ export async function prepareEmbeddedSkills(params: {
       restoreSkillEnv: () => {},
       skillUsagePaths: undefined,
       skillsPrompt: "",
+      legacySkillsPromptFallback: false,
       skillsSnapshotForRun: undefined,
       skillReadResources: undefined,
       codeModeSkills: [],
@@ -94,8 +101,7 @@ export async function prepareEmbeddedSkills(params: {
     const rebuildSeparatedSnapshot =
       params.separateRemoteNote &&
       preparedSnapshot &&
-      (preparedSnapshot.catalogPrompt === undefined ||
-        preparedSnapshot.promptFormatVersion !== WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION);
+      !hasCurrentSkillSnapshotProjection(preparedSnapshot);
     const runEligibility =
       skillsEligibility ??
       (preparedSnapshot?.nodeSkillsEligibility
@@ -106,21 +112,50 @@ export async function prepareEmbeddedSkills(params: {
             }),
           }
         : undefined);
-    const skillsSnapshot =
-      (!rebuildSeparatedSnapshot ? preparedSnapshot : undefined) ??
-      (await buildSkillSnapshot(skillsPromptWorkspaceDir, {
-        entries:
-          promptSkillEntries ??
-          (rebuildSeparatedSnapshot ? (mapEntries(await loadSkillEntries()) ?? []) : []),
-        config: params.attempt.config,
-        agentId: params.sessionAgentId,
-        eligibility: runEligibility,
-        preserveEntryOrder,
-        assertCurrent: params.assertCurrent,
-      }));
+    let skillsSnapshot = preparedSnapshot;
+    let legacySkillsPromptFallback = false;
+    if (!skillsSnapshot || rebuildSeparatedSnapshot) {
+      const retained = skillsSnapshot;
+      try {
+        if (retained?.resolvedSkills !== undefined) {
+          const remoteNote = runEligibility?.remote?.note;
+          skillsSnapshot = reprojectSkillSnapshot(
+            { ...retained, remoteNote },
+            retained.resolvedSkills,
+            {
+              config: params.attempt.config,
+              agentId: params.sessionAgentId,
+              remoteNote,
+            },
+          );
+        } else {
+          skillsSnapshot = await buildSkillSnapshot(skillsPromptWorkspaceDir, {
+            entries:
+              promptSkillEntries ??
+              (rebuildSeparatedSnapshot ? (mapEntries(await loadSkillEntries()) ?? []) : []),
+            config: params.attempt.config,
+            agentId: params.sessionAgentId,
+            eligibility: runEligibility,
+            preserveEntryOrder,
+            assertCurrent: params.assertCurrent,
+          });
+        }
+      } catch (error) {
+        if (!params.separateRemoteNote || !retained) throw error;
+        params.assertCurrent?.();
+        skillsSnapshot = retained;
+        legacySkillsPromptFallback = true;
+        skillsLogger.warn(
+          "Using legacy skills prompt for this turn; separated projection unavailable.",
+        );
+      }
+    }
     const [skillsPrompt, libraryEntries] = await settleCurrentReadPreparations([
       resolveSkillsPrompt({
-        separateRemoteNote: params.separateRemoteNote,
+        separateRemoteNote: params.separateRemoteNote && !legacySkillsPromptFallback,
+        onLegacyPromptFallback: () => {
+          legacySkillsPromptFallback = true;
+        },
         assertCurrent: params.assertCurrent,
         contextTokenBudget: params.attempt.contextTokenBudget,
         skillsSnapshot,
@@ -172,6 +207,7 @@ export async function prepareEmbeddedSkills(params: {
       skillReadResources,
       skillUsagePaths,
       skillsPrompt,
+      legacySkillsPromptFallback,
       skillsSnapshotForRun: skillsSnapshot,
       codeModeSkills,
       installedSkills,

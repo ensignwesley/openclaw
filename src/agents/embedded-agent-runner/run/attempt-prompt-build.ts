@@ -402,7 +402,12 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   capabilityToolNames: ReadonlySet<string>;
   visibleToolNames?: ReadonlySet<string>;
   codeModeActive?: boolean;
-  preparedSkills?: Pick<Awaited<ReturnType<typeof prepareEmbeddedSkills>>, "skillsSnapshotForRun">;
+  preparedSkills?: Pick<
+    Awaited<ReturnType<typeof prepareEmbeddedSkills>>,
+    "skillsSnapshotForRun"
+  > & {
+    legacySkillsPromptFallback?: boolean;
+  };
   boundaryTimezone?: string;
   includeBoundaryTimestamp: boolean;
   isRawModelRun: boolean;
@@ -544,6 +549,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       ? input.preparedSkills.skillsSnapshotForRun
       : attempt.skillsSnapshot;
     if (
+      !input.preparedSkills?.legacySkillsPromptFallback &&
       snapshot?.nodeSkillsEligibility?.canExec &&
       canAccessSkills({
         availableTools: input.capabilityToolNames,
