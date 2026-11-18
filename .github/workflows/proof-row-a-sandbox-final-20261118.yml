@@ -1,0 +1,39 @@
+name: Row A final sandbox exact-head regression and formatting
+on:
+  push:
+    branches: [proof/row-a-sandbox-final-20261118]
+permissions:
+  contents: read
+jobs:
+  final:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          ref: 19315c32d55e56f6e45827a6664ae3b4a452b6d9
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Check all own-change formatting and final sandbox model request
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-sandbox-final
+        run: |
+          mkdir -p "$ROW_A_RECEIPTS_DIR"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
+          git fetch --no-tags --depth=1 origin 53633171bf52fddf2abe3c5549b97320febb2677
+          mapfile -t files < <(git diff --name-only 53633171bf52fddf2abe3c5549b97320febb2677 HEAD -- '*.ts')
+          corepack pnpm exec oxfmt --check "${files[@]}" 2>&1 | tee "$ROW_A_RECEIPTS_DIR/format-check.log"
+          node scripts/run-vitest.mjs src/skills/runtime/sandbox-catalog.integration.test.ts --maxWorkers=1
+      - name: Preserve final proof
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: row-a-sandbox-final-${{ github.sha }}
+          path: ${{ runner.temp }}/row-a-sandbox-final
+          if-no-files-found: error
+          retention-days: 30
