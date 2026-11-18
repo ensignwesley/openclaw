@@ -149,29 +149,49 @@ afterEach(async () => {
 describe("prepareEmbeddedAttemptPromptContext", () => {
   registerParityHostLifecycle();
 
-  it.each([true, false])("carries remote skills availability only with admitted node exec: %s", async (canExec) => {
-    const note = "Remote macOS node available (proof). Run macOS-only skills via exec host=node on that node.";
-    const { input } = createInput({ attempt: createAttempt({ skillsSnapshot: {
-      prompt: `legacy catalog`, catalogPrompt: "catalog", skills: [],
-      nodeSkillsEligibility: { canExec }, remoteNote: note,
-    } }) });
-    input.capabilityToolNames = new Set(["read"]);
-    const result = await prepareContext(input);
-    expect(result.systemPromptForHook).toBe(input.systemPromptText);
-    if (canExec) {
-      expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(note);
-    } else {
-      expect(result.runtimeContextMessageForCurrentTurn?.content).not.toContain(note);
-    }
-  });
+  it.each([true, false])(
+    "carries remote skills availability only with admitted node exec: %s",
+    async (canExec) => {
+      const note =
+        "Remote macOS node available (proof). Run macOS-only skills via exec host=node on that node.";
+      const { input } = createInput({
+        attempt: createAttempt({
+          skillsSnapshot: {
+            prompt: `legacy catalog`,
+            catalogPrompt: "catalog",
+            skills: [],
+            nodeSkillsEligibility: { canExec },
+            remoteNote: note,
+          },
+        }),
+      });
+      input.capabilityToolNames = new Set(["read"]);
+      const result = await prepareContext(input);
+      expect(result.systemPromptForHook).toBe(input.systemPromptText);
+      if (canExec) {
+        expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(note);
+      } else {
+        expect(result.runtimeContextMessageForCurrentTurn?.content).not.toContain(note);
+      }
+    },
+  );
 
   it("carries explicit unavailable remote skills on an ordinary eligible turn", async () => {
-    const { input } = createInput({ attempt: createAttempt({ skillsSnapshot: {
-      prompt: "catalog", catalogPrompt: "catalog", skills: [], nodeSkillsEligibility: { canExec: true },
-    } }) });
+    const { input } = createInput({
+      attempt: createAttempt({
+        skillsSnapshot: {
+          prompt: "catalog",
+          catalogPrompt: "catalog",
+          skills: [],
+          nodeSkillsEligibility: { canExec: true },
+        },
+      }),
+    });
     input.capabilityToolNames = new Set(["read"]);
     const result = await prepareContext(input);
-    expect(result.runtimeContextMessageForCurrentTurn?.content).toContain("Remote macOS execution is unavailable for this turn.");
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
+      "Remote macOS execution is unavailable for this turn.",
+    );
     expect(result.systemPromptForHook).toBe(input.systemPromptText);
   });
 

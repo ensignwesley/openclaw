@@ -10,8 +10,8 @@ import {
   applySkillEnvOverridesFromSnapshot,
 } from "../../skills/runtime/env-overrides.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
-import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../../skills/types.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
+import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../../skills/types.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { prepareInstalledSkillCatalog } from "../installed-skill-runtime.js";
 import type { SandboxContext } from "../sandbox/types.js";
@@ -91,17 +91,27 @@ export async function prepareEmbeddedSkills(params: {
   let restoreSkillEnv = () => {};
   try {
     const promptSkillEntries = mapEntries(shouldLoadSkillEntries ? skillEntries : undefined);
-    const rebuildSeparatedSnapshot = params.separateRemoteNote && preparedSnapshot &&
+    const rebuildSeparatedSnapshot =
+      params.separateRemoteNote &&
+      preparedSnapshot &&
       (preparedSnapshot.catalogPrompt === undefined ||
         preparedSnapshot.promptFormatVersion !== WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION);
-    const runEligibility = skillsEligibility ?? (preparedSnapshot?.nodeSkillsEligibility ? {
-      nodeSkills: preparedSnapshot.nodeSkillsEligibility,
-      remote: getRemoteSkillEligibility({ advertiseExecNode: preparedSnapshot.nodeSkillsEligibility.canExec }),
-    } : undefined);
+    const runEligibility =
+      skillsEligibility ??
+      (preparedSnapshot?.nodeSkillsEligibility
+        ? {
+            nodeSkills: preparedSnapshot.nodeSkillsEligibility,
+            remote: getRemoteSkillEligibility({
+              advertiseExecNode: preparedSnapshot.nodeSkillsEligibility.canExec,
+            }),
+          }
+        : undefined);
     const skillsSnapshot =
       (!rebuildSeparatedSnapshot ? preparedSnapshot : undefined) ??
       (await buildSkillSnapshot(skillsPromptWorkspaceDir, {
-        entries: promptSkillEntries ?? (rebuildSeparatedSnapshot ? mapEntries(await loadSkillEntries()) ?? [] : []),
+        entries:
+          promptSkillEntries ??
+          (rebuildSeparatedSnapshot ? (mapEntries(await loadSkillEntries()) ?? []) : []),
         config: params.attempt.config,
         agentId: params.sessionAgentId,
         eligibility: runEligibility,

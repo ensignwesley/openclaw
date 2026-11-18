@@ -177,11 +177,20 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
 
   it("projects catalog-only bytes separately without changing legacy composition", async () => {
     const entries = [makeEntry(makeSkill("weather", "Get weather data"))];
-    const note = "Remote macOS node available (proof). Run macOS-only skills via exec host=node on that node.";
+    const note =
+      "Remote macOS node available (proof). Run macOS-only skills via exec host=node on that node.";
     const offline = await buildSkillSnapshot("/fake", { entries });
-    const online = await buildSkillSnapshot("/fake", { entries, eligibility: { remote: {
-      platforms: ["darwin"], hasBin: () => false, hasAnyBin: () => false, note,
-    } } });
+    const online = await buildSkillSnapshot("/fake", {
+      entries,
+      eligibility: {
+        remote: {
+          platforms: ["darwin"],
+          hasBin: () => false,
+          hasAnyBin: () => false,
+          note,
+        },
+      },
+    });
     expect(online.catalogPrompt).toBe(offline.catalogPrompt);
     expect(online.catalogPrompt).toBe(offline.prompt);
     expect(online.prompt).toBe(`${note}\n${offline.prompt}`);

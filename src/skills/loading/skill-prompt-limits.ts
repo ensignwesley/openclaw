@@ -142,9 +142,13 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
     ) ?? "";
   return {
     prompt,
-    catalogPrompt: renderWithinLimit(
-      skillsForPrompt, { kind: "compact", descriptionMaxChars }, includeLimitNote, false,
-    ) ?? "",
+    catalogPrompt:
+      renderWithinLimit(
+        skillsForPrompt,
+        { kind: "compact", descriptionMaxChars },
+        includeLimitNote,
+        false,
+      ) ?? "",
     skills: prompt ? skillsForPrompt : [],
   };
 }

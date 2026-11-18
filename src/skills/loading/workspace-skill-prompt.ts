@@ -83,7 +83,7 @@ async function buildSkillsPromptFromEntries(
     ...params,
     entries,
   });
-  const prompt = params.separateRemoteNote ? snapshot.catalogPrompt ?? "" : snapshot.prompt;
+  const prompt = params.separateRemoteNote ? (snapshot.catalogPrompt ?? "") : snapshot.prompt;
   return prompt.trim() ? prompt : "";
 }
 
@@ -103,12 +103,16 @@ async function rebuildAfterUnsafeSnapshot(
 }
 
 async function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): Promise<string> {
-  if (params.separateRemoteNote && params.skillsSnapshot && params.skillsSnapshot.catalogPrompt === undefined) {
+  if (
+    params.separateRemoteNote &&
+    params.skillsSnapshot &&
+    params.skillsSnapshot.catalogPrompt === undefined
+  ) {
     return rebuildAfterUnsafeSnapshot(params, "unsupported-prompt-format");
   }
-  const snapshotPrompt = (params.separateRemoteNote
-    ? params.skillsSnapshot?.catalogPrompt
-    : params.skillsSnapshot?.prompt)?.trim();
+  const snapshotPrompt = (
+    params.separateRemoteNote ? params.skillsSnapshot?.catalogPrompt : params.skillsSnapshot?.prompt
+  )?.trim();
   if (params.skillsSnapshot && !snapshotPrompt) {
     return "";
   }

@@ -1,7 +1,7 @@
-import type { prepareEmbeddedSkills } from "../skill-runtime.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AgentTool } from "../../runtime/index.js";
+import type { prepareEmbeddedSkills } from "../skill-runtime.js";
 import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import type { createPromptBuildToolPolicy } from "./attempt-prompt-support.js";

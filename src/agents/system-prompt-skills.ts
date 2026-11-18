@@ -12,7 +12,9 @@ export function canAccessSkills(params: {
   const installedSkillRead = params.availableTools.has("skills_read");
   return params.codeModeActive
     ? params.visibleTools.has("exec") && installedSkillRead
-    : params.visibleTools.has("read") || installedSkillRead || params.promptSurface === "cli_backend";
+    : params.visibleTools.has("read") ||
+        installedSkillRead ||
+        params.promptSurface === "cli_backend";
 }
 
 export function buildSkillsSection(params: {

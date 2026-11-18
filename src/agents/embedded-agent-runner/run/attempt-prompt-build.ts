@@ -33,18 +33,18 @@ import {
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
+import { canAccessSkills } from "../../system-prompt-skills.js";
 import {
   appendModelIdentitySystemPrompt,
   buildModelIdentityPromptLine,
 } from "../../system-prompt.js";
-import { canAccessSkills } from "../../system-prompt-skills.js";
-import type { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { log } from "../logger.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import {
   createToolResultPromptProjectionState,
   type ToolResultPromptProjectionState,
 } from "../session-prompt-state.js";
+import type { prepareEmbeddedSkills } from "../skill-runtime.js";
 import {
   resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars,
@@ -397,7 +397,8 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   appendOnlyRuntimeContext?: boolean;
   executionHost?: boolean;
   inHistorySystemUpdates?: boolean;
-  attempt: PromptContextAttempt & Partial<Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "skillsSnapshot">>;
+  attempt: PromptContextAttempt &
+    Partial<Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "skillsSnapshot">>;
   capabilityToolNames: ReadonlySet<string>;
   visibleToolNames?: ReadonlySet<string>;
   codeModeActive?: boolean;
@@ -542,11 +543,14 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     const snapshot = input.preparedSkills
       ? input.preparedSkills.skillsSnapshotForRun
       : attempt.skillsSnapshot;
-    if (snapshot?.nodeSkillsEligibility?.canExec && canAccessSkills({
-      availableTools: input.capabilityToolNames,
-      visibleTools: input.visibleToolNames ?? input.capabilityToolNames,
-      codeModeActive: input.codeModeActive,
-    })) {
+    if (
+      snapshot?.nodeSkillsEligibility?.canExec &&
+      canAccessSkills({
+        availableTools: input.capabilityToolNames,
+        visibleTools: input.visibleToolNames ?? input.capabilityToolNames,
+        codeModeActive: input.codeModeActive,
+      })
+    ) {
       activeNodeFragments.push({
         kind: "conversation-data",
         text: snapshot.remoteNote ?? "Remote macOS execution is unavailable for this turn.",
