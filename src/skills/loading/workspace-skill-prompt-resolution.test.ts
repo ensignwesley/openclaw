@@ -266,7 +266,8 @@ describe("resolveSkillsPrompt", () => {
 
 it("attempts separated projection recovery only once and retains the original legacy bytes", async () => {
   const snapshot = await snapshotOf([createEntry("selected")]);
-  const originalPrompt = snapshot.prompt;
+  // The established legacy reader trims stored whitespace; compare with its actual output.
+  const originalPrompt = await resolve({ skillsSnapshot: snapshot });
   delete snapshot.catalogPrompt;
   const project = vi
     .spyOn(reprojection, "reprojectSkillSnapshot")
