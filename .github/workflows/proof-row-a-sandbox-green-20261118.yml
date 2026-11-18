@@ -1,0 +1,43 @@
+name: Row A repaired exact-head focused proof
+on:
+  push:
+    branches: [proof/row-a-sandbox-green-20261118]
+permissions:
+  contents: read
+jobs:
+  green:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Select exact product-only owners with unchanged capture harness
+        run: |
+          cp src/skills/runtime/remote-prefix-proof.integration.test.ts "$RUNNER_TEMP/proof.test.ts"
+          git fetch --no-tags --depth=1 origin ce9bf9bdf538f83d58a8d3e285e3c05726638e2d
+          git checkout --detach ce9bf9bdf538f83d58a8d3e285e3c05726638e2d
+          cp "$RUNNER_TEMP/proof.test.ts" src/skills/runtime/remote-prefix-proof.integration.test.ts
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Regressions, real-renderer parity, then wire oracle
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-sandbox-green
+        run: |
+          mkdir -p "$ROW_A_RECEIPTS_DIR"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
+          sha256sum src/skills/runtime/remote-prefix-proof.integration.test.ts > "$ROW_A_RECEIPTS_DIR/harness.sha256"
+          node scripts/run-vitest.mjs src/skills/runtime/sandbox-catalog.integration.test.ts src/agents/embedded-agent-runner/sandbox-skills.test.ts src/skills/runtime/remote-note-review.integration.test.ts src/skills/loading/workspace-skill-prompt-resolution.test.ts --maxWorkers=1
+          node scripts/run-vitest.mjs src/skills/runtime/remote-prefix-proof.integration.test.ts --maxWorkers=1
+      - name: Preserve receipts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: row-a-sandbox-green-${{ github.sha }}
+          path: ${{ runner.temp }}/row-a-sandbox-green
+          if-no-files-found: error
+          retention-days: 30
