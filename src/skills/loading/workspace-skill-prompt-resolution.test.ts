@@ -7,6 +7,8 @@ import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-st
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION, type SkillEntry } from "../types.js";
+import * as reprojection from "./skill-snapshot-reprojection.js";
+import { formatSkillsForPromptBounded } from "./skill-prompt-limits.js";
 import { buildSkillSnapshot, resolveSkillsPrompt } from "./workspace-skill-prompt.js";
 
 const loggingMocks = vi.hoisted(() => ({ warn: vi.fn() }));
@@ -260,4 +262,61 @@ describe("resolveSkillsPrompt", () => {
 
     expect(prompt).not.toContain("/app/skills/hidden-skill/SKILL.md");
   });
+});
+
+
+it("attempts separated projection recovery only once and retains the original legacy bytes", async () => {
+  const snapshot = await snapshotOf([createEntry("selected")]);
+  const originalPrompt = snapshot.prompt;
+  delete snapshot.catalogPrompt;
+  const project = vi.spyOn(reprojection, "reprojectSkillSnapshot")
+    .mockReturnValueOnce({ ...snapshot, prompt: "BROKEN PROJECTOR OUTPUT", catalogPrompt: "INCONSISTENT" })
+    .mockImplementationOnce(() => { throw new Error("Second projection attempt sentinel"); });
+  const fallback = vi.fn();
+  try {
+    const prompt = await resolve({ skillsSnapshot: snapshot, separateRemoteNote: true, onLegacyPromptFallback: fallback });
+    expect.soft(project).toHaveBeenCalledTimes(1);
+    expect.soft(prompt).toBe(originalPrompt);
+    expect(fallback).toHaveBeenCalledTimes(1);
+    expect(loggingMocks.warn).toHaveBeenCalledWith(
+      "Using legacy skills prompt for this turn; separated projection unavailable.",
+      { errorName: "SkillsProjectionInvariantError", errorMessage: "Reprojected skills snapshot does not satisfy the current prompt projection invariant." },
+    );
+  } finally { project.mockRestore(); }
+});
+
+// Projection contract controls, not a substitute for the seven-state real-producer wire oracle.
+for (const state of ["online-1", "offline", "online-2", "stale-c1-removal", "linux", "no-system-run", "denied"]) {
+  it(`keeps projection pairs valid across renderer budgets: ${state}`, async () => {
+    const note = ["online-1", "online-2", "stale-c1-removal"].includes(state)
+      ? "Remote macOS node available (Projection Mac). Run macOS-only skills via exec host=node on that node.  " : undefined;
+    for (const options of [
+      { maxSkillsPromptChars: 18000 },
+      { maxSkillsPromptChars: 800 },
+      { maxSkillsPromptChars: 100, maxSkillsInPrompt: 0 },
+      { maxSkillsPromptChars: 0 },
+    ]) {
+      const entries = [createEntry("a", "Long guidance. ".repeat(100)), createEntry("b", "More guidance. ".repeat(100))];
+      const snapshot = await snapshotOf(entries);
+      const projected = reprojection.reprojectSkillSnapshot({ ...snapshot, remoteNote: note }, snapshot.resolvedSkills!, { ...options, remoteNote: note });
+      expect(reprojection.hasCurrentSkillSnapshotProjection(projected)).toBe(true);
+    }
+    const empty = await snapshotOf([]);
+    const noteOnly = reprojection.reprojectSkillSnapshot({ ...empty, remoteNote: note }, [], { remoteNote: note });
+    expect(noteOnly.prompt).toBe(note ?? "");
+    expect(noteOnly.catalogPrompt).toBe("");
+    expect(reprojection.hasCurrentSkillSnapshotProjection(noteOnly)).toBe(true);
+  });
+}
+
+it("keeps remapping owners' legacy formatter bytes unchanged inside and beyond default limits", async () => {
+  for (const count of [1, 151]) {
+    const entries = Array.from({ length: count }, (_, n) => createEntry(`skill-${n}`, "Long guidance. ".repeat(100)));
+    const snapshot = await snapshotOf(entries);
+    // Both remapping owners supply the exact remapped set with preserveOrder and no remote prefix/config.
+    const resolved = entries.map(e => e.skill);
+    const projected = reprojection.reprojectSkillSnapshot(snapshot, resolved);
+    expect(projected.prompt).toBe(formatSkillsForPromptBounded({ skills: resolved, preserveOrder: true }));
+    expect(reprojection.hasCurrentSkillSnapshotProjection(projected)).toBe(true);
+  }
 });
