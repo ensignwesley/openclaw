@@ -8,8 +8,10 @@ import { hasUnavailableSkillSecretOwners, isSkillSecretOwnerUnavailable } from "
 import { resolveSkillKey } from "./frontmatter.js";
 import { compactSkillsPromptForContext, escapeSkillXml } from "./skill-contract.js";
 import {
+  assertCurrentSkillSnapshotProjection,
   hasCurrentSkillSnapshotProjection,
   reprojectSkillSnapshot,
+  skillProjectionErrorDetails,
 } from "./skill-snapshot-reprojection.js";
 import { resolveWorkspaceSkillPromptEntries } from "./workspace-skill-loader.js";
 
@@ -114,6 +116,9 @@ async function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): Pr
     !hasCurrentSkillSnapshotProjection(params.skillsSnapshot)
   ) {
     const snapshot = params.skillsSnapshot;
+    let failure: unknown = new Error(
+      "Snapshot has no resolved skills or available loader entries.",
+    );
     try {
       if (snapshot.resolvedSkills !== undefined) {
         const remoteNote = params.eligibility
@@ -128,11 +133,13 @@ async function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): Pr
             remoteNote,
           },
         );
-        return await resolveSkillsPromptCatalog({ ...params, skillsSnapshot: projected });
+        assertCurrentSkillSnapshotProjection(projected);
+        return await readSkillsPromptCatalog({ ...params, skillsSnapshot: projected });
       }
       const entries = params.entries ?? (await params.loadEntries?.());
       if (entries !== undefined) return await buildSkillsPromptFromEntries(params, entries);
-    } catch {
+    } catch (error) {
+      failure = error;
       // Do not turn lost read authority into permission to use a retained prompt.
       params.assertCurrent?.();
     }
@@ -140,9 +147,15 @@ async function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): Pr
     params.onLegacyPromptFallback?.();
     skillsLogger.warn(
       "Using legacy skills prompt for this turn; separated projection unavailable.",
+      skillProjectionErrorDetails(failure),
     );
-    return resolveSkillsPromptCatalog({ ...params, separateRemoteNote: false });
+    return readSkillsPromptCatalog({ ...params, separateRemoteNote: false });
   }
+  return readSkillsPromptCatalog(params);
+}
+
+// Reading never retries projection recovery: a malformed projector cannot re-enter the guard.
+async function readSkillsPromptCatalog(params: ResolveSkillsPromptParams): Promise<string> {
   const snapshotPrompt = (
     params.separateRemoteNote ? params.skillsSnapshot?.catalogPrompt : params.skillsSnapshot?.prompt
   )?.trim();

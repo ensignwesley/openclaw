@@ -43,3 +43,26 @@ export function hasCurrentSkillSnapshotProjection(snapshot: SkillSnapshot): bool
   const note = snapshot.remoteNote;
   return Boolean(note && snapshot.prompt === (catalog ? `${note}\n${catalog}` : note));
 }
+
+export function assertCurrentSkillSnapshotProjection(snapshot: SkillSnapshot): void {
+  if (!hasCurrentSkillSnapshotProjection(snapshot)) {
+    const error = new Error(
+      "Reprojected skills snapshot does not satisfy the current prompt projection invariant.",
+    );
+    error.name = "SkillsProjectionInvariantError";
+    throw error;
+  }
+}
+
+/** Do not serialize error stacks, causes, or attached skill/snapshot contents into diagnostics. */
+export function skillProjectionErrorDetails(error: unknown): {
+  errorName: string;
+  errorMessage: string;
+} {
+  return error instanceof Error
+    ? { errorName: error.name, errorMessage: error.message }
+    : {
+        errorName: "NonErrorThrown",
+        errorMessage: "A non-Error value was thrown while preparing the skills projection.",
+      };
+}

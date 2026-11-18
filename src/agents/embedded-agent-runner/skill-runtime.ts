@@ -3,8 +3,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { prepareSkillLibrarySelection } from "../../skills/library/selection.js";
 import {
+  assertCurrentSkillSnapshotProjection,
   hasCurrentSkillSnapshotProjection,
   reprojectSkillSnapshot,
+  skillProjectionErrorDetails,
 } from "../../skills/loading/skill-snapshot-reprojection.js";
 import {
   buildSkillSnapshot,
@@ -140,6 +142,7 @@ export async function prepareEmbeddedSkills(params: {
             assertCurrent: params.assertCurrent,
           });
         }
+        if (params.separateRemoteNote) assertCurrentSkillSnapshotProjection(skillsSnapshot);
       } catch (error) {
         if (!params.separateRemoteNote || !retained) throw error;
         params.assertCurrent?.();
@@ -147,6 +150,7 @@ export async function prepareEmbeddedSkills(params: {
         legacySkillsPromptFallback = true;
         skillsLogger.warn(
           "Using legacy skills prompt for this turn; separated projection unavailable.",
+          skillProjectionErrorDetails(error),
         );
       }
     }

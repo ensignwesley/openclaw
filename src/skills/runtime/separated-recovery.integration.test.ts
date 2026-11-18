@@ -20,11 +20,24 @@ import * as skillLoader from "../loading/workspace-skill-loader.js";
 import * as promptOwner from "../loading/workspace-skill-prompt.js";
 import * as refreshOwner from "./refresh.js";
 
+// Mock isolation: preserve the real logger factory and all other exports; observe only skills warnings.
+const diagnostics = vi.hoisted(() => ({ warn: vi.fn() }));
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => {
+      const logger = actual.createSubsystemLogger(...args);
+      return args[0] === "skills" ? { ...logger, warn: diagnostics.warn } : logger;
+    },
+  };
+});
 registerParityHostLifecycle();
 const remoteNote =
   "Remote macOS node available (Synthetic fallback Mac). Run macOS-only skills via exec host=node on that node.";
 
 async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallback") {
+  diagnostics.warn.mockClear();
   try {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", path.join(state.root, "empty-skills"));
@@ -178,6 +191,17 @@ async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallba
           1,
         );
         if (kind === "reader-fallback") expect(fallbackNotifications).toBe(1);
+        expect(diagnostics.warn).toHaveBeenCalledTimes(1);
+        expect(diagnostics.warn).toHaveBeenCalledWith(
+          "Using legacy skills prompt for this turn; separated projection unavailable.",
+          {
+            errorName: "Error",
+            errorMessage:
+              kind === "fallback"
+                ? "Synthetic projection unavailable"
+                : "Synthetic discovery unavailable",
+          },
+        );
       }
     });
   } finally {
