@@ -21,7 +21,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 registerParityHostLifecycle();
 
-it("renders only materialized sandbox skills at container paths in the model request", async () => {
+it("preserves v8 library selections and delivered-only sandbox catalog through the real caller", async () => {
   try {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const host = path.join(state.root, "host-skills");
@@ -57,6 +57,17 @@ it("renders only materialized sandbox skills at container paths in the model req
         "withheld",
       ]);
       expect(snapshot.catalogPrompt).toContain(host);
+      // Synthetic persisted-v8 selection; sandbox delivery already supplies its bytes.
+      const librarySelections = [{
+        skillId: "11111111-1111-4111-8111-111111111111",
+        revision: "a".repeat(64),
+        name: "delivered",
+        ownerProfileId: null,
+      }];
+      snapshot.promptFormatVersion = 8;
+      delete snapshot.catalogPrompt;
+      snapshot.librarySelections = librarySelections;
+      snapshot.resolvedSkills = snapshot.resolvedSkills?.filter((skill) => skill.name === "delivered");
       const sandbox = createAgentToolsSandboxContext({
         workspaceDir: materialized,
         agentWorkspaceDir: host,
@@ -81,11 +92,6 @@ it("renders only materialized sandbox skills at container paths in the model req
         sessionAgentId: "main",
       });
       const expectedLocation = "/workspace/.openclaw/sandbox-skills/skills/delivered/SKILL.md";
-      // These guards prove the real caller performed materialized remapping before rendering.
-      expect(prepared.skillsSnapshotForRun?.resolvedSkills?.map((skill) => skill.name)).toEqual([
-        "delivered",
-      ]);
-      expect(prepared.skillsSnapshotForRun?.prompt).toContain(expectedLocation);
       const read = createReadTool(materialized);
       const requestTools = [
         { name: read.name, description: read.description, parameters: read.parameters },
@@ -130,6 +136,9 @@ it("renders only materialized sandbox skills at container paths in the model req
               catalog,
               expectedLocation,
               host,
+              librarySelections: prepared.skillsSnapshotForRun?.librarySelections,
+              expectedLibrarySelections: librarySelections,
+              preparedFormat: prepared.skillsSnapshotForRun?.promptFormatVersion,
               preparedResolved: prepared.skillsSnapshotForRun?.resolvedSkills?.map((skill) => ({
                 name: skill.name,
                 filePath: skill.filePath,
@@ -145,6 +154,7 @@ it("renders only materialized sandbox skills at container paths in the model req
         );
       }
       // RED on da71: actual model catalog still contains host locations and withheld skill.
+      expect.soft(prepared.skillsSnapshotForRun?.librarySelections).toEqual(librarySelections);
       expect(catalog).toEqual([{ name: "delivered", location: expectedLocation }]);
       expect(modelSystem).not.toContain(host);
       expect(modelSystem).not.toContain("<name>withheld</name>");
