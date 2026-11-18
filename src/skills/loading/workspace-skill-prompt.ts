@@ -109,7 +109,29 @@ async function rebuildAfterUnsafeSnapshot(
   return buildSkillsPromptFromEntries(params, entries);
 }
 
+function hasUnavailableSnapshotSkillOwners(snapshot: SkillSnapshot): boolean {
+  return (
+    snapshot.skills.some((skill) => isSkillSecretOwnerUnavailable(skill.skillKey ?? skill.name)) ||
+    (snapshot.skills.some((skill) => !skill.skillKey) && hasUnavailableSkillSecretOwners())
+  );
+}
+
+/** Legacy exclusion and degraded-owner decisions take precedence over projection repair. */
+export function shouldPreserveLegacySkillSnapshotPrompt(snapshot: SkillSnapshot): boolean {
+  return !snapshot.prompt.trim() || hasUnavailableSnapshotSkillOwners(snapshot);
+}
+
 async function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): Promise<string> {
+  if (
+    params.separateRemoteNote &&
+    params.skillsSnapshot &&
+    shouldPreserveLegacySkillSnapshotPrompt(params.skillsSnapshot)
+  ) {
+    params.assertCurrent?.();
+    params.onLegacyPromptFallback?.();
+    return readSkillsPromptCatalog({ ...params, separateRemoteNote: false });
+  }
+
   if (
     params.separateRemoteNote &&
     params.skillsSnapshot &&
@@ -166,11 +188,9 @@ async function readSkillsPromptCatalog(params: ResolveSkillsPromptParams): Promi
     (skill) => !skill.skillKey,
   );
   if (snapshotPrompt) {
-    const snapshotHasUnavailableSkill =
-      params.skillsSnapshot?.skills.some((skill) =>
-        isSkillSecretOwnerUnavailable(skill.skillKey ?? skill.name),
-      ) ||
-      (snapshotHasLegacySkillIdentity && hasUnavailableSkillSecretOwners());
+    const snapshotHasUnavailableSkill = params.skillsSnapshot
+      ? hasUnavailableSnapshotSkillOwners(params.skillsSnapshot)
+      : false;
     if (
       snapshotHasUnavailableSkill &&
       params.skillsSnapshot?.promptFormatVersion !== WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION

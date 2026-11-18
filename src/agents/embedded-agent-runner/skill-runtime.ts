@@ -11,6 +11,7 @@ import {
 import {
   buildSkillSnapshot,
   resolveSkillsPrompt,
+  shouldPreserveLegacySkillSnapshotPrompt,
 } from "../../skills/loading/workspace-skill-prompt.js";
 import {
   applySkillEnvOverrides,
@@ -100,9 +101,15 @@ export async function prepareEmbeddedSkills(params: {
   let restoreSkillEnv = () => {};
   try {
     const promptSkillEntries = mapEntries(shouldLoadSkillEntries ? skillEntries : undefined);
+    const preserveLegacyPrompt = Boolean(
+      params.separateRemoteNote &&
+      preparedSnapshot &&
+      shouldPreserveLegacySkillSnapshotPrompt(preparedSnapshot),
+    );
     const rebuildSeparatedSnapshot =
       params.separateRemoteNote &&
       preparedSnapshot &&
+      !preserveLegacyPrompt &&
       !hasCurrentSkillSnapshotProjection(preparedSnapshot);
     const runEligibility =
       skillsEligibility ??
@@ -115,7 +122,7 @@ export async function prepareEmbeddedSkills(params: {
           }
         : undefined);
     let skillsSnapshot = preparedSnapshot;
-    let legacySkillsPromptFallback = false;
+    let legacySkillsPromptFallback = preserveLegacyPrompt;
     if (!skillsSnapshot || rebuildSeparatedSnapshot) {
       const retained = skillsSnapshot;
       try {
