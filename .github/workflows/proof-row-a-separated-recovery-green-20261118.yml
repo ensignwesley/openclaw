@@ -1,0 +1,45 @@
+name: Row A repaired exact-head focused proof
+on:
+  push:
+    branches: [proof/row-a-separated-recovery-green-20261118]
+permissions:
+  contents: read
+jobs:
+  green:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Select exact product-only owners with unchanged capture harness
+        run: |
+          cp src/skills/runtime/remote-prefix-proof.integration.test.ts "$RUNNER_TEMP/proof.test.ts"
+          cp test/fixtures/row-a-real-legacy-baseline.json "$RUNNER_TEMP/row-a-real-legacy-baseline.json"
+          git fetch --no-tags --depth=1 origin 080de6bfb6ab6ed46b5f8d571d4904e388d04374
+          git checkout --detach 080de6bfb6ab6ed46b5f8d571d4904e388d04374
+          cp "$RUNNER_TEMP/proof.test.ts" src/skills/runtime/remote-prefix-proof.integration.test.ts
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Regressions, real-renderer parity, then wire oracle
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-separated-recovery-green
+        run: |
+          mkdir -p "$ROW_A_RECEIPTS_DIR"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
+          sha256sum src/skills/runtime/remote-prefix-proof.integration.test.ts > "$ROW_A_RECEIPTS_DIR/harness.sha256"
+          node scripts/run-vitest.mjs src/skills/runtime/separated-recovery.integration.test.ts src/skills/runtime/sandbox-v8-library.integration.test.ts src/gateway/worker-environments/worker-skill-prefix.integration.test.ts src/gateway/worker-environments/skill-resource-transfer.test.ts src/skills/runtime/sandbox-catalog.integration.test.ts src/agents/embedded-agent-runner/sandbox-skills.test.ts src/skills/runtime/remote-note-review.integration.test.ts src/skills/loading/workspace-skill-prompt-resolution.test.ts --maxWorkers=1
+          node scripts/run-vitest.mjs src/skills/runtime/remote-prefix-proof.integration.test.ts --maxWorkers=1
+          node --input-type=module -e 'import fs from "node:fs"; const a=fs.readFileSync(process.env.RUNNER_TEMP+"/row-a-real-legacy-baseline.json");const b=fs.readFileSync(process.env.ROW_A_RECEIPTS_DIR+"/legacy-controls.json");const c=JSON.parse(b);const result={count:c.length,cliResolved:c.every(x=>typeof x.cli==="string"&&x.cli.length>0),byteIdentical:a.equals(b)};fs.writeFileSync(process.env.ROW_A_RECEIPTS_DIR+"/legacy-comparison.json",JSON.stringify(result,null,2));if(c.length!==28||!result.cliResolved||!result.byteIdentical)throw Error("Legacy bytes changed: STOP");' 
+      - name: Preserve receipts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: row-a-separated-recovery-green-${{ github.sha }}
+          path: ${{ runner.temp }}/row-a-separated-recovery-green
+          if-no-files-found: error
+          retention-days: 30
