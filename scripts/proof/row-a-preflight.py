@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail before setup when a copied proof fixture is missing or not its pinned bytes."""
 import hashlib, pathlib, subprocess
-FILES = {'src/skills/runtime/remote-prefix-proof.integration.test.ts': 'bda3803d402823cffaf4e4d7e988a19ce3a5251f7a86ac456d6979c7b35cf01b', 'src/skills/runtime/legacy-precedence.integration.test.ts': 'cf9fd53c924685ad087ae2698c2ea2392be3d3327ff2cfadf1952175c1021cff'}
+FILES = {'scripts/proof/remote-prefix-proof.ts.txt': 'bda3803d402823cffaf4e4d7e988a19ce3a5251f7a86ac456d6979c7b35cf01b', 'src/skills/runtime/legacy-precedence.integration.test.ts': 'cf9fd53c924685ad087ae2698c2ea2392be3d3327ff2cfadf1952175c1021cff'}
 for name, expected in FILES.items():
     path = pathlib.Path(name)
     if not path.is_file():

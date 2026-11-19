@@ -23,7 +23,7 @@ jobs:
       - name: Save exact corrected harness and fetch both owners
         run: |
           set -euo pipefail
-          cp src/skills/runtime/remote-prefix-proof.integration.test.ts "$RUNNER_TEMP/corrected-proof.ts"
+          cp scripts/proof/remote-prefix-proof.ts.txt "$RUNNER_TEMP/corrected-proof.ts"
           cp src/skills/runtime/legacy-precedence.integration.test.ts "$RUNNER_TEMP/legacy-proof.ts"
           git fetch --no-tags --depth=1 origin 53633171bf52fddf2abe3c5549b97320febb2677 c38edb269ecc0907ee595dc2911ea89c21d9df5a
       - uses: ./.github/actions/setup-node-env
