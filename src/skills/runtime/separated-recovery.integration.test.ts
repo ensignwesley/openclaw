@@ -7,6 +7,7 @@ import {
 } from "../../../packages/ai/src/provider-transport-parity.test-support.js";
 import { prepareEmbeddedAttemptPromptContext } from "../../agents/embedded-agent-runner/run/attempt-prompt-build.js";
 import { buildAttemptSystemPrompt } from "../../agents/embedded-agent-runner/run/attempt-system-prompt.js";
+import { prepareRuntimeSkillEntries } from "../../agents/embedded-agent-runner/skills-prompt.js";
 import { prepareEmbeddedSkills } from "../../agents/embedded-agent-runner/skill-runtime.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { createReadTool } from "../../agents/sessions/tools/read.js";
@@ -18,6 +19,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { parseSkillsPromptCatalog } from "../loading/skill-prompt-catalog.js";
 import * as skillLoader from "../loading/workspace-skill-loader.js";
 import * as promptOwner from "../loading/workspace-skill-prompt.js";
+import * as projectionOwner from "../loading/skill-snapshot-reprojection.js";
 import * as refreshOwner from "./refresh.js";
 
 // Mock isolation: preserve the real logger factory and all other exports; observe only skills warnings.
@@ -36,7 +38,7 @@ registerParityHostLifecycle();
 const remoteNote =
   "Remote macOS node available (Synthetic fallback Mac). Run macOS-only skills via exec host=node on that node.";
 
-async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallback") {
+async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallback" | "v8-roots") {
   diagnostics.warn.mockClear();
   try {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -56,15 +58,33 @@ async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallba
         path.join(source, "skills", "selected", "SKILL.md"),
         "---\nname: selected\ndescription: Selected fixture\n---\nRead selected.\n",
       );
-      const config = { plugins: { enabled: false }, agents: { defaults: { workspace: source } } };
+      const workspace = kind === "v8-roots" ? empty : source;
+      if (kind === "v8-roots") {
+        const added = path.join(workspace, "skills", kind === "loader" ? "new-outsider" : "selected");
+        await fs.mkdir(added, { recursive: true });
+        await fs.writeFile(path.join(added, "SKILL.md"), "---\nname: " + (kind === "loader" ? "new-outsider" : "selected") + "\ndescription: Wrong current root\n---\nNot captured.\n");
+      }
+      const config = { plugins: { enabled: false }, agents: { defaults: { workspace } } };
       setRuntimeConfigSnapshot(config);
       const snapshot = await promptOwner.buildSkillSnapshot(source, { config });
       const expectedLocation = snapshot.resolvedSkills![0]!.filePath;
       const original = snapshot.prompt;
+      if (kind === "loader") {
+        const added = path.join(source, "skills", "new-outsider");
+        await fs.mkdir(added, { recursive: true });
+        await fs.writeFile(path.join(added, "SKILL.md"), "---\nname: new-outsider\ndescription: Added after capture\n---\nNot captured.\n");
+      }
       snapshot.promptFormatVersion = kind === "loader" ? 9 : 8;
       if (kind === "loader") snapshot.catalogPrompt = "STALE DERIVED CATALOG";
       else delete snapshot.catalogPrompt;
-      if (kind !== "resolved") delete snapshot.resolvedSkills;
+      if (kind !== "resolved" && kind !== "fallback") delete snapshot.resolvedSkills;
+      snapshot.skillOverrides = { selected: true };
+      if (kind === "v8-roots") {
+        snapshot.skillRoots = { agentWorkspaceDir: source, executionWorkspaceDir: path.join(state.root, "captured-execution") };
+        await fs.mkdir(snapshot.skillRoots.executionWorkspaceDir, { recursive: true });
+        const actual = await prepareRuntimeSkillEntries({ skillsAnchorWorkspace: workspace, executionWorkspaceDir: workspace, config, skillsSnapshot: snapshot, agentId: "main" });
+        expect.soft(actual.skillEntries.find((entry) => entry.skill.name === "selected")?.skill.filePath).toBe(expectedLocation);
+      }
       if (kind === "fallback" || kind === "reader-fallback") {
         snapshot.remoteNote = remoteNote;
         snapshot.nodeSkillsEligibility = { canExec: true };
@@ -80,15 +100,14 @@ async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallba
         kind === "resolved" ? vi.spyOn(skillLoader, "prepareWorkspaceSkills") : undefined;
       let prepared;
       let fallbackNotifications = 0;
+      const readerLoader = vi.fn(async () => { throw new Error("Synthetic discovery unavailable"); });
       if (kind === "reader-fallback") {
         // Fault injection at the exported reader's loader seam, not a runtime discovery reproduction.
         const params = {
           separateRemoteNote: true,
           skillsSnapshot: snapshot,
           workspaceDir: source,
-          loadEntries: async () => {
-            throw new Error("Synthetic discovery unavailable");
-          },
+          loadEntries: readerLoader,
           onLegacyPromptFallback: () => {
             fallbackNotifications++;
           },
@@ -102,16 +121,14 @@ async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallba
       } else {
         if (kind === "fallback") {
           // Fault injection into the new re-projection call only, after the real source snapshot exists.
-          vi.spyOn(promptOwner, "buildSkillSnapshot").mockRejectedValueOnce(
-            new Error("Synthetic projection unavailable"),
-          );
+          vi.spyOn(projectionOwner, "reprojectSkillSnapshot").mockImplementationOnce(() => { throw new Error("Synthetic projection unavailable"); });
         }
         prepared = await prepareEmbeddedSkills({
           separateRemoteNote: true,
           applySkillEnvironment: false,
           includeCodeModeSkills: false,
           attempt,
-          effectiveWorkspace: kind === "resolved" ? empty : source,
+          effectiveWorkspace: kind === "resolved" ? empty : workspace,
           sandbox: undefined,
           sessionAgentId: "main",
         });
@@ -184,24 +201,31 @@ async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallba
       }
       if (kind === "resolved") expect.soft(loaderSpy).not.toHaveBeenCalled();
       expect(catalog).toEqual([{ name: "selected", location: expectedLocation }]);
+      if (kind === "loader" || kind === "v8-roots" || kind === "reader-fallback") {
+        expect.soft(prepared.skillsPrompt).toBe(snapshot.prompt);
+        expect.soft(prepared.skillsSnapshotForRun).toBe(snapshot);
+        expect.soft(prepared.skillsSnapshotForRun?.skillOverrides).toEqual({ selected: true });
+        expect.soft(prepared.legacySkillsPromptFallback).toBe(true);
+        expect.soft(diagnostics.warn).not.toHaveBeenCalled();
+      }
       if (kind === "fallback" || kind === "reader-fallback") {
         expect(prepared.skillsPrompt).toBe(snapshot.prompt);
         expect(prepared.legacySkillsPromptFallback).toBe(true);
         expect((JSON.stringify(payload).match(/Remote macOS node available/g) ?? []).length).toBe(
           1,
         );
-        if (kind === "reader-fallback") expect(fallbackNotifications).toBe(1);
+        if (kind === "reader-fallback") { expect(fallbackNotifications).toBe(1); expect(readerLoader).not.toHaveBeenCalled(); }
+        if (kind === "fallback") {
         expect(diagnostics.warn).toHaveBeenCalledTimes(1);
         expect(diagnostics.warn).toHaveBeenCalledWith(
           "Using legacy skills prompt for this turn; separated projection unavailable.",
           {
             errorName: "Error",
             errorMessage:
-              kind === "fallback"
-                ? "Synthetic projection unavailable"
-                : "Synthetic discovery unavailable",
+              "Synthetic projection unavailable",
           },
         );
+        }
       }
     });
   } finally {
@@ -215,7 +239,8 @@ async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallba
 
 it("reprojects an old hydrated snapshot from its exact resolved set without a loader", () =>
   runCase("resolved"));
-it("rebuilds an inconsistent unhydrated pair through the ordinary loader", () => runCase("loader"));
+it("retains an inconsistent unhydrated pair as legacy bytes without widening the selection", () => runCase("loader"));
+it("hydrates a v8 selected skill from captured roots, not the current run roots", () => runCase("v8-roots"));
 it("keeps legacy bytes and one availability fact when the new projection fails", () =>
   runCase("fallback"));
 it("keeps legacy bytes with one notification at the canonical reader fallback", () =>
