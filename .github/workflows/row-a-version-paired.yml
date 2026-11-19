@@ -16,6 +16,10 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 1
+      - name: Preflight exact proof-tree copy inputs before setup
+        run: |
+          set -euo pipefail
+          python3 scripts/proof/row-a-preflight.py
       - name: Save exact corrected harness and fetch both owners
         run: |
           set -euo pipefail
