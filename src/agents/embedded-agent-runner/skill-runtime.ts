@@ -123,35 +123,34 @@ export async function prepareEmbeddedSkills(params: {
         : undefined);
     let skillsSnapshot = preparedSnapshot;
     let legacySkillsPromptFallback = preserveLegacyPrompt;
-    if (!skillsSnapshot || rebuildSeparatedSnapshot) {
+    if (
+      preserveLegacyPrompt &&
+      preparedSnapshot?.resolvedSkills === undefined &&
+      !hasCurrentSkillSnapshotProjection(preparedSnapshot)
+    ) {
+      skillsLogger.debug("Using legacy skills prompt for an unhydrated snapshot.");
+    }
+    if (!skillsSnapshot) {
+      skillsSnapshot = await buildSkillSnapshot(skillsPromptWorkspaceDir, {
+        entries: promptSkillEntries ?? [],
+        config: params.attempt.config,
+        agentId: params.sessionAgentId,
+        eligibility: runEligibility,
+        preserveEntryOrder,
+        assertCurrent: params.assertCurrent,
+      });
+      if (params.separateRemoteNote) assertCurrentSkillSnapshotProjection(skillsSnapshot);
+    } else if (rebuildSeparatedSnapshot && skillsSnapshot.resolvedSkills !== undefined) {
       const retained = skillsSnapshot;
       try {
-        if (retained?.resolvedSkills !== undefined) {
-          const remoteNote = runEligibility?.remote?.note;
-          skillsSnapshot = reprojectSkillSnapshot(
-            { ...retained, remoteNote },
-            retained.resolvedSkills,
-            {
-              config: params.attempt.config,
-              agentId: params.sessionAgentId,
-              remoteNote,
-            },
-          );
-        } else {
-          skillsSnapshot = await buildSkillSnapshot(skillsPromptWorkspaceDir, {
-            entries:
-              promptSkillEntries ??
-              (rebuildSeparatedSnapshot ? (mapEntries(await loadSkillEntries()) ?? []) : []),
-            config: params.attempt.config,
-            agentId: params.sessionAgentId,
-            eligibility: runEligibility,
-            preserveEntryOrder,
-            assertCurrent: params.assertCurrent,
-          });
-        }
-        if (params.separateRemoteNote) assertCurrentSkillSnapshotProjection(skillsSnapshot);
+        const remoteNote = runEligibility?.remote?.note;
+        skillsSnapshot = reprojectSkillSnapshot(
+          { ...retained, remoteNote },
+          skillsSnapshot.resolvedSkills,
+          { config: params.attempt.config, agentId: params.sessionAgentId, remoteNote },
+        );
+        assertCurrentSkillSnapshotProjection(skillsSnapshot);
       } catch (error) {
-        if (!params.separateRemoteNote || !retained) throw error;
         params.assertCurrent?.();
         skillsSnapshot = retained;
         legacySkillsPromptFallback = true;

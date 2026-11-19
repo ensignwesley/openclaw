@@ -118,60 +118,48 @@ function hasUnavailableSnapshotSkillOwners(snapshot: SkillSnapshot): boolean {
 
 /** Legacy exclusion and degraded-owner decisions take precedence over projection repair. */
 export function shouldPreserveLegacySkillSnapshotPrompt(snapshot: SkillSnapshot): boolean {
-  return !snapshot.prompt.trim() || hasUnavailableSnapshotSkillOwners(snapshot);
+  return (
+    !snapshot.prompt.trim() ||
+    hasUnavailableSnapshotSkillOwners(snapshot) ||
+    (snapshot.resolvedSkills === undefined && !hasCurrentSkillSnapshotProjection(snapshot))
+  );
 }
 
 async function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): Promise<string> {
-  if (
-    params.separateRemoteNote &&
-    params.skillsSnapshot &&
-    shouldPreserveLegacySkillSnapshotPrompt(params.skillsSnapshot)
-  ) {
+  const snapshot = params.skillsSnapshot;
+  if (params.separateRemoteNote && snapshot && shouldPreserveLegacySkillSnapshotPrompt(snapshot)) {
     params.assertCurrent?.();
     params.onLegacyPromptFallback?.();
+    if (snapshot.resolvedSkills === undefined && !hasCurrentSkillSnapshotProjection(snapshot)) {
+      skillsLogger.debug("Using legacy skills prompt for an unhydrated snapshot.");
+    }
     return readSkillsPromptCatalog({ ...params, separateRemoteNote: false });
   }
-
   if (
     params.separateRemoteNote &&
-    params.skillsSnapshot &&
-    !hasCurrentSkillSnapshotProjection(params.skillsSnapshot)
+    snapshot &&
+    snapshot.resolvedSkills !== undefined &&
+    !hasCurrentSkillSnapshotProjection(snapshot)
   ) {
-    const snapshot = params.skillsSnapshot;
-    let failure: unknown = new Error(
-      "Snapshot has no resolved skills or available loader entries.",
-    );
     try {
-      if (snapshot.resolvedSkills !== undefined) {
-        const remoteNote = params.eligibility
-          ? params.eligibility.remote?.note
-          : snapshot.remoteNote;
-        const projected = reprojectSkillSnapshot(
-          { ...snapshot, remoteNote },
-          snapshot.resolvedSkills,
-          {
-            config: params.config,
-            agentId: params.agentId,
-            remoteNote,
-          },
-        );
-        assertCurrentSkillSnapshotProjection(projected);
-        return await readSkillsPromptCatalog({ ...params, skillsSnapshot: projected });
-      }
-      const entries = params.entries ?? (await params.loadEntries?.());
-      if (entries !== undefined) return await buildSkillsPromptFromEntries(params, entries);
+      const remoteNote = params.eligibility ? params.eligibility.remote?.note : snapshot.remoteNote;
+      const projected = reprojectSkillSnapshot(
+        { ...snapshot, remoteNote },
+        snapshot.resolvedSkills,
+        { config: params.config, agentId: params.agentId, remoteNote },
+      );
+      assertCurrentSkillSnapshotProjection(projected);
+      return await readSkillsPromptCatalog({ ...params, skillsSnapshot: projected });
     } catch (error) {
-      failure = error;
       // Do not turn lost read authority into permission to use a retained prompt.
       params.assertCurrent?.();
+      params.onLegacyPromptFallback?.();
+      skillsLogger.warn(
+        "Using legacy skills prompt for this turn; separated projection unavailable.",
+        skillProjectionErrorDetails(error),
+      );
+      return readSkillsPromptCatalog({ ...params, separateRemoteNote: false });
     }
-    params.assertCurrent?.();
-    params.onLegacyPromptFallback?.();
-    skillsLogger.warn(
-      "Using legacy skills prompt for this turn; separated projection unavailable.",
-      skillProjectionErrorDetails(failure),
-    );
-    return readSkillsPromptCatalog({ ...params, separateRemoteNote: false });
   }
   return readSkillsPromptCatalog(params);
 }
