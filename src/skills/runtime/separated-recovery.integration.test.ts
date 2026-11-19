@@ -86,7 +86,7 @@ async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallba
           "---\nname: new-outsider\ndescription: Added after capture\n---\nNot captured.\n",
         );
       }
-      snapshot.promptFormatVersion = kind === "loader" ? 9 : 8;
+      snapshot.promptFormatVersion = 8;
       if (kind === "loader") snapshot.catalogPrompt = "STALE DERIVED CATALOG";
       else delete snapshot.catalogPrompt;
       if (kind !== "resolved" && kind !== "fallback") delete snapshot.resolvedSkills;
@@ -237,7 +237,7 @@ async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallba
       }
       if (kind === "resolved") expect.soft(loaderSpy).not.toHaveBeenCalled();
       expect.soft(catalog).toEqual([{ name: "selected", location: expectedLocation }]);
-      if (kind === "loader" || kind === "v8-roots" || kind === "reader-fallback") {
+      if (["resolved", "loader", "v8-roots", "fallback", "reader-fallback"].includes(kind)) {
         expect.soft(prepared.skillsPrompt).toBe(legacyPrompt);
         expect.soft(prepared.skillsSnapshotForRun).toBe(snapshot);
         expect.soft(prepared.skillsSnapshotForRun?.skillOverrides).toEqual({ selected: true });
@@ -255,14 +255,8 @@ async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallba
           expect(readerLoader).not.toHaveBeenCalled();
         }
         if (kind === "fallback") {
-          expect(diagnostics.warn).toHaveBeenCalledTimes(1);
-          expect(diagnostics.warn).toHaveBeenCalledWith(
-            "Using legacy skills prompt for this turn; separated projection unavailable.",
-            {
-              errorName: "Error",
-              errorMessage: "Synthetic projection unavailable",
-            },
-          );
+          expect(projectionOwner.reprojectSkillSnapshot).not.toHaveBeenCalled();
+          expect(diagnostics.warn).not.toHaveBeenCalled();
         }
       }
     });
@@ -275,13 +269,12 @@ async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallba
   }
 }
 
-it("reprojects an old hydrated snapshot from its exact resolved set without a loader", () =>
+it("retains an old hydrated snapshot as legacy bytes without a loader or promotion", () =>
   runCase("resolved"));
 it("retains an inconsistent unhydrated pair as legacy bytes without widening the selection", () =>
   runCase("loader"));
 it("hydrates a v8 selected skill from captured roots, not the current run roots", () =>
   runCase("v8-roots"));
-it("keeps legacy bytes and one availability fact when the new projection fails", () =>
-  runCase("fallback"));
+it("never attempts projection repair for a hydrated legacy snapshot", () => runCase("fallback"));
 it("keeps legacy bytes with one notification at the canonical reader fallback", () =>
   runCase("reader-fallback"));

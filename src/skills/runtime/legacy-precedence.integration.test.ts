@@ -84,7 +84,7 @@ async function runCase(kind: Kind, owner: "embedded" | "reader") {
         };
       else {
         snapshot = await buildSkillSnapshot(captured, { config });
-        snapshot.promptFormatVersion = kind === "old-degraded" ? 8 : 9;
+        snapshot.promptFormatVersion = kind === "old-degraded" ? 7 : 8;
         delete snapshot.catalogPrompt;
         if (kind === "keyed-degraded") delete snapshot.resolvedSkills;
         if (kind === "legacy-identity")
@@ -235,6 +235,11 @@ async function runCase(kind: Kind, owner: "embedded" | "reader") {
       } else {
         expect(catalog.some((s) => s.name === "cold")).toBe(false);
         expect(system).not.toContain("Current cold guidance");
+        if (kind === "keyed-degraded") {
+          expect(system).toContain("Captured healthy guidance");
+          expect(system).not.toContain("Current healthy guidance");
+          expect(catalog.some((s) => s.name === "outsider")).toBe(false);
+        }
       }
     });
   } finally {

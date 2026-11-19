@@ -264,7 +264,7 @@ describe("resolveSkillsPrompt", () => {
   });
 });
 
-it("attempts separated projection recovery only once and retains the original legacy bytes", async () => {
+it("does not attempt separated recovery for a legacy snapshot", async () => {
   const snapshot = await snapshotOf([createEntry("selected")]);
   // The established legacy reader trims stored whitespace; compare with its actual output.
   const originalPrompt = await resolve({ skillsSnapshot: snapshot });
@@ -286,17 +286,10 @@ it("attempts separated projection recovery only once and retains the original le
       separateRemoteNote: true,
       onLegacyPromptFallback: fallback,
     });
-    expect.soft(project).toHaveBeenCalledTimes(1);
+    expect.soft(project).not.toHaveBeenCalled();
     expect.soft(prompt).toBe(originalPrompt);
     expect(fallback).toHaveBeenCalledTimes(1);
-    expect(loggingMocks.warn).toHaveBeenCalledWith(
-      "Using legacy skills prompt for this turn; separated projection unavailable.",
-      {
-        errorName: "SkillsProjectionInvariantError",
-        errorMessage:
-          "Reprojected skills snapshot does not satisfy the current prompt projection invariant.",
-      },
-    );
+    expect(loggingMocks.warn).not.toHaveBeenCalled();
   } finally {
     project.mockRestore();
   }
