@@ -5,8 +5,6 @@ import { prepareSkillLibrarySelection } from "../../skills/library/selection.js"
 import {
   assertCurrentSkillSnapshotProjection,
   hasCurrentSkillSnapshotProjection,
-  reprojectSkillSnapshot,
-  skillProjectionErrorDetails,
 } from "../../skills/loading/skill-snapshot-reprojection.js";
 import {
   buildSkillSnapshot,
@@ -106,11 +104,6 @@ export async function prepareEmbeddedSkills(params: {
       preparedSnapshot &&
       shouldPreserveLegacySkillSnapshotPrompt(preparedSnapshot),
     );
-    const rebuildSeparatedSnapshot =
-      params.separateRemoteNote &&
-      preparedSnapshot &&
-      !preserveLegacyPrompt &&
-      !hasCurrentSkillSnapshotProjection(preparedSnapshot);
     const runEligibility =
       skillsEligibility ??
       (preparedSnapshot?.nodeSkillsEligibility
@@ -125,10 +118,12 @@ export async function prepareEmbeddedSkills(params: {
     let legacySkillsPromptFallback = preserveLegacyPrompt;
     if (
       preserveLegacyPrompt &&
-      preparedSnapshot?.resolvedSkills === undefined &&
+      preparedSnapshot &&
       !hasCurrentSkillSnapshotProjection(preparedSnapshot)
     ) {
-      skillsLogger.debug("Using legacy skills prompt for an unhydrated snapshot.");
+      skillsLogger.debug(
+        "Using legacy skills prompt for a snapshot without a valid separated pair.",
+      );
     }
     if (!skillsSnapshot) {
       skillsSnapshot = await buildSkillSnapshot(skillsPromptWorkspaceDir, {
@@ -140,25 +135,6 @@ export async function prepareEmbeddedSkills(params: {
         assertCurrent: params.assertCurrent,
       });
       if (params.separateRemoteNote) assertCurrentSkillSnapshotProjection(skillsSnapshot);
-    } else if (rebuildSeparatedSnapshot && skillsSnapshot.resolvedSkills !== undefined) {
-      const retained = skillsSnapshot;
-      try {
-        const remoteNote = runEligibility?.remote?.note;
-        skillsSnapshot = reprojectSkillSnapshot(
-          { ...retained, remoteNote },
-          skillsSnapshot.resolvedSkills,
-          { config: params.attempt.config, agentId: params.sessionAgentId, remoteNote },
-        );
-        assertCurrentSkillSnapshotProjection(skillsSnapshot);
-      } catch (error) {
-        params.assertCurrent?.();
-        skillsSnapshot = retained;
-        legacySkillsPromptFallback = true;
-        skillsLogger.warn(
-          "Using legacy skills prompt for this turn; separated projection unavailable.",
-          skillProjectionErrorDetails(error),
-        );
-      }
     }
     const [skillsPrompt, libraryEntries] = await settleCurrentReadPreparations([
       resolveSkillsPrompt({

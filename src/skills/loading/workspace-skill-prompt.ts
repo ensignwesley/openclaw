@@ -7,12 +7,7 @@ import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { hasUnavailableSkillSecretOwners, isSkillSecretOwnerUnavailable } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { compactSkillsPromptForContext, escapeSkillXml } from "./skill-contract.js";
-import {
-  assertCurrentSkillSnapshotProjection,
-  hasCurrentSkillSnapshotProjection,
-  reprojectSkillSnapshot,
-  skillProjectionErrorDetails,
-} from "./skill-snapshot-reprojection.js";
+import { hasCurrentSkillSnapshotProjection } from "./skill-snapshot-reprojection.js";
 import { resolveWorkspaceSkillPromptEntries } from "./workspace-skill-loader.js";
 
 const skillsLogger = createSubsystemLogger("skills");
@@ -116,12 +111,12 @@ function hasUnavailableSnapshotSkillOwners(snapshot: SkillSnapshot): boolean {
   );
 }
 
-/** Legacy exclusion and degraded-owner decisions take precedence over projection repair. */
+/** Legacy snapshots and degraded-owner decisions retain the established reader. */
 export function shouldPreserveLegacySkillSnapshotPrompt(snapshot: SkillSnapshot): boolean {
   return (
     !snapshot.prompt.trim() ||
     hasUnavailableSnapshotSkillOwners(snapshot) ||
-    (snapshot.resolvedSkills === undefined && !hasCurrentSkillSnapshotProjection(snapshot))
+    !hasCurrentSkillSnapshotProjection(snapshot)
   );
 }
 
@@ -130,41 +125,17 @@ async function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): Pr
   if (params.separateRemoteNote && snapshot && shouldPreserveLegacySkillSnapshotPrompt(snapshot)) {
     params.assertCurrent?.();
     params.onLegacyPromptFallback?.();
-    if (snapshot.resolvedSkills === undefined && !hasCurrentSkillSnapshotProjection(snapshot)) {
-      skillsLogger.debug("Using legacy skills prompt for an unhydrated snapshot.");
+    if (!hasCurrentSkillSnapshotProjection(snapshot)) {
+      skillsLogger.debug(
+        "Using legacy skills prompt for a snapshot without a valid separated pair.",
+      );
     }
     return readSkillsPromptCatalog({ ...params, separateRemoteNote: false });
-  }
-  if (
-    params.separateRemoteNote &&
-    snapshot &&
-    snapshot.resolvedSkills !== undefined &&
-    !hasCurrentSkillSnapshotProjection(snapshot)
-  ) {
-    try {
-      const remoteNote = params.eligibility ? params.eligibility.remote?.note : snapshot.remoteNote;
-      const projected = reprojectSkillSnapshot(
-        { ...snapshot, remoteNote },
-        snapshot.resolvedSkills,
-        { config: params.config, agentId: params.agentId, remoteNote },
-      );
-      assertCurrentSkillSnapshotProjection(projected);
-      return await readSkillsPromptCatalog({ ...params, skillsSnapshot: projected });
-    } catch (error) {
-      // Do not turn lost read authority into permission to use a retained prompt.
-      params.assertCurrent?.();
-      params.onLegacyPromptFallback?.();
-      skillsLogger.warn(
-        "Using legacy skills prompt for this turn; separated projection unavailable.",
-        skillProjectionErrorDetails(error),
-      );
-      return readSkillsPromptCatalog({ ...params, separateRemoteNote: false });
-    }
   }
   return readSkillsPromptCatalog(params);
 }
 
-// Reading never retries projection recovery: a malformed projector cannot re-enter the guard.
+// Legacy snapshots retain the established reader; only validated pairs use the separated catalog.
 async function readSkillsPromptCatalog(params: ResolveSkillsPromptParams): Promise<string> {
   const snapshotPrompt = (
     params.separateRemoteNote ? params.skillsSnapshot?.catalogPrompt : params.skillsSnapshot?.prompt

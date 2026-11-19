@@ -90,7 +90,11 @@ async function prepareCase(legacy: boolean, capabilities: string[], codeModeActi
         sessionAgentId: "main",
       });
       expect(prepared.skillsPrompt).toContain("<name>fixed</name>");
-      expect(prepared.skillsPrompt).not.toContain("Remote macOS node available");
+      if (legacy) {
+        expect(prepared.skillsPrompt).toBe(snapshot.prompt.trim());
+        expect(prepared.skillsSnapshotForRun).toBe(snapshot);
+        expect(prepared.legacySkillsPromptFallback).toBe(true);
+      } else expect(prepared.skillsPrompt).not.toContain("Remote macOS node available");
       const systemPrompt = buildAgentSystemPrompt({
         workspaceDir: workspace,
         skillsPrompt: prepared.skillsPrompt,
@@ -123,6 +127,7 @@ async function prepareCase(legacy: boolean, capabilities: string[], codeModeActi
       return {
         turn: JSON.stringify(context.hookMessagesForCurrentPrompt),
         legacy,
+        systemPrompt,
         preparedNote: prepared.skillsSnapshotForRun?.remoteNote,
       };
     });
@@ -136,14 +141,14 @@ async function prepareCase(legacy: boolean, capabilities: string[], codeModeActi
   }
 }
 
-it("retains connected Mac availability when a persisted v8 catalog is rebuilt", async () => {
+it("retains composed legacy availability without rebuilding a persisted v8 catalog", async () => {
   const result = await prepareCase(true, ["read", "computer"]);
   if (process.env.ROW_A_RECEIPTS_DIR)
     await fs.writeFile(
       path.join(process.env.ROW_A_RECEIPTS_DIR, "legacy-case.json"),
       JSON.stringify(result, null, 2),
     );
-  expect(result.turn).toContain("Remote macOS node available");
+  expect(result.systemPrompt + result.turn).toContain("Remote macOS node available");
   expect(result.turn).not.toContain("Remote macOS execution is unavailable");
 });
 

@@ -131,7 +131,7 @@ export type SkillEligibilityContext = {
   };
 };
 
-export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 9;
+export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 8;
 
 export type SkillSnapshot = {
   librarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];

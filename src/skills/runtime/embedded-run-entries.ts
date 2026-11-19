@@ -36,10 +36,8 @@ export async function resolveEmbeddedRunSkillEntries(params: {
   const config = resolveSkillRuntimeConfig(params.config);
   // Materialized sandbox copies are the sole read root, including lazy rebuilds
   // of hydrated library snapshots that still carry their host provenance.
-  // v8 already records these roots: a prompt-only format bump must not discard provenance.
-  const promptFormatVersion = params.skillsSnapshot?.promptFormatVersion;
   const persistedRoots =
-    promptFormatVersion === 8 || promptFormatVersion === WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION
+    params.skillsSnapshot?.promptFormatVersion === WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION
       ? params.skillsSnapshot.skillRoots
       : undefined;
   const skillRoots = normalizeWorkspaceSkillRoots(

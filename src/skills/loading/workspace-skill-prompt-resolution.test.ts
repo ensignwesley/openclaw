@@ -264,7 +264,7 @@ describe("resolveSkillsPrompt", () => {
   });
 });
 
-it("attempts separated projection recovery only once and retains the original legacy bytes", async () => {
+it("does not attempt separated recovery for a legacy snapshot", async () => {
   const snapshot = await snapshotOf([createEntry("selected")]);
   // The established legacy reader trims stored whitespace; compare with its actual output.
   const originalPrompt = await resolve({ skillsSnapshot: snapshot });
@@ -286,17 +286,10 @@ it("attempts separated projection recovery only once and retains the original le
       separateRemoteNote: true,
       onLegacyPromptFallback: fallback,
     });
-    expect.soft(project).toHaveBeenCalledTimes(1);
+    expect.soft(project).not.toHaveBeenCalled();
     expect.soft(prompt).toBe(originalPrompt);
     expect(fallback).toHaveBeenCalledTimes(1);
-    expect(loggingMocks.warn).toHaveBeenCalledWith(
-      "Using legacy skills prompt for this turn; separated projection unavailable.",
-      {
-        errorName: "SkillsProjectionInvariantError",
-        errorMessage:
-          "Reprojected skills snapshot does not satisfy the current prompt projection invariant.",
-      },
-    );
+    expect(loggingMocks.warn).not.toHaveBeenCalled();
   } finally {
     project.mockRestore();
   }
@@ -330,14 +323,12 @@ for (const state of [
       const projected = reprojection.reprojectSkillSnapshot(
         { ...snapshot, remoteNote: note },
         snapshot.resolvedSkills!,
-        { ...options, remoteNote: note },
+        options,
       );
       expect(reprojection.hasCurrentSkillSnapshotProjection(projected)).toBe(true);
     }
     const empty = await snapshotOf([]);
-    const noteOnly = reprojection.reprojectSkillSnapshot({ ...empty, remoteNote: note }, [], {
-      remoteNote: note,
-    });
+    const noteOnly = reprojection.reprojectSkillSnapshot({ ...empty, remoteNote: note }, []);
     expect(noteOnly.prompt).toBe(note ?? "");
     expect(noteOnly.catalogPrompt).toBe("");
     expect(reprojection.hasCurrentSkillSnapshotProjection(noteOnly)).toBe(true);
@@ -357,5 +348,24 @@ it("keeps remapping owners' legacy formatter bytes unchanged inside and beyond d
       formatSkillsForPromptBounded({ skills: resolved, preserveOrder: true }),
     );
     expect(reprojection.hasCurrentSkillSnapshotProjection(projected)).toBe(true);
+  }
+});
+
+it("uses pair shape rather than format version and never promotes a legacy remap", async () => {
+  const snapshot = await snapshotOf([createEntry("selected")]);
+  const resolved = snapshot.resolvedSkills!;
+  for (const version of [undefined, 7, 8]) {
+    const paired = { ...snapshot, promptFormatVersion: version };
+    expect(reprojection.hasCurrentSkillSnapshotProjection(paired)).toBe(true);
+    const remapped = reprojection.reprojectSkillSnapshot(paired, resolved);
+    expect(remapped.promptFormatVersion).toBe(version);
+    expect(reprojection.hasCurrentSkillSnapshotProjection(remapped)).toBe(true);
+    const { catalogPrompt: _catalogPrompt, ...legacy } = paired;
+    const retained = reprojection.reprojectSkillSnapshot(legacy, resolved);
+    expect(retained.catalogPrompt).toBeUndefined();
+    expect(retained.promptFormatVersion).toBe(version);
+    expect(retained.prompt).toBe(
+      formatSkillsForPromptBounded({ skills: resolved, preserveOrder: true }),
+    );
   }
 });
