@@ -1,0 +1,46 @@
+name: Row A candidate-first failing-file attribution
+on:
+  push:
+    branches: [proof/row-a-candidate-first-failing-files-20261120]
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  paired:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Preserve harness outside checkout
+        run: |
+          set -euo pipefail
+          cp -r scripts/row-a-failing-files "$RUNNER_TEMP/row-a-failing-harness"
+          git checkout --detach d47aff73a21bd55b564cf2768b03fb2d85f4f03f
+          echo CHECKOUT_SHA=$(git rev-parse HEAD)
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "true"
+          cache-mode: "off"
+      - name: Prepare browser fixture
+        run: node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts
+      - name: Candidate first then only candidate failures on base
+        env:
+          PRODUCT: d47aff73a21bd55b564cf2768b03fb2d85f4f03f
+          BASE: 53633171bf52fddf2abe3c5549b97320febb2677
+          RECEIPTS: ${{ runner.temp }}/row-a-failing-receipts
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/row-a-failing-harness/runner.py"
+      - name: Preserve actual exits and full assertions
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: row-a-failing-files-${{ github.sha }}
+          path: ${{ runner.temp }}/row-a-failing-receipts
+          if-no-files-found: error
+          retention-days: 30
