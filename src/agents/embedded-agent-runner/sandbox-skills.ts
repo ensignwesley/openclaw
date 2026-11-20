@@ -191,7 +191,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
       if (!resolvedSkills) {
         throw new Error("Selected skill snapshot must be hydrated before sandbox delivery.");
       }
-      selectedSnapshot = reprojectSkillSnapshot({ ...snapshot, discoverySkills }, resolvedSkills);
+      selectedSnapshot = { ...reprojectSkillSnapshot(snapshot, resolvedSkills), discoverySkills };
     }
     return {
       ...(params.sandbox.skillsEligibility

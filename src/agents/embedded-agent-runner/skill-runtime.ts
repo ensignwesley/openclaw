@@ -4,12 +4,11 @@ import { settleCurrentReadPreparations } from "../../shared/current-read-authori
 import { prepareSkillLibrarySelection } from "../../skills/library/selection.js";
 import {
   assertCurrentSkillSnapshotProjection,
-  hasCurrentSkillSnapshotProjection,
+  classifySkillSnapshot,
 } from "../../skills/loading/skill-snapshot-reprojection.js";
 import {
   buildSkillSnapshot,
   resolveSkillsPrompt,
-  shouldPreserveLegacySkillSnapshotPrompt,
 } from "../../skills/loading/workspace-skill-prompt.js";
 import {
   applySkillEnvOverrides,
@@ -99,11 +98,6 @@ export async function prepareEmbeddedSkills(params: {
   let restoreSkillEnv = () => {};
   try {
     const promptSkillEntries = mapEntries(shouldLoadSkillEntries ? skillEntries : undefined);
-    const preserveLegacyPrompt = Boolean(
-      params.separateRemoteNote &&
-      preparedSnapshot &&
-      shouldPreserveLegacySkillSnapshotPrompt(preparedSnapshot),
-    );
     const runEligibility =
       skillsEligibility ??
       (preparedSnapshot?.nodeSkillsEligibility
@@ -115,16 +109,7 @@ export async function prepareEmbeddedSkills(params: {
           }
         : undefined);
     let skillsSnapshot = preparedSnapshot;
-    let legacySkillsPromptFallback = preserveLegacyPrompt;
-    if (
-      preserveLegacyPrompt &&
-      preparedSnapshot &&
-      !hasCurrentSkillSnapshotProjection(preparedSnapshot)
-    ) {
-      skillsLogger.debug(
-        "Using legacy skills prompt for a snapshot without a valid separated pair.",
-      );
-    }
+
     if (!skillsSnapshot) {
       skillsSnapshot = await buildSkillSnapshot(skillsPromptWorkspaceDir, {
         entries: promptSkillEntries ?? [],
@@ -135,6 +120,14 @@ export async function prepareEmbeddedSkills(params: {
         assertCurrent: params.assertCurrent,
       });
       if (params.separateRemoteNote) assertCurrentSkillSnapshotProjection(skillsSnapshot);
+    }
+    const inputClass = classifySkillSnapshot(skillsSnapshot);
+    let legacySkillsPromptFallback = Boolean(params.separateRemoteNote && inputClass === "legacy");
+    if (inputClass === "legacy") {
+      const { catalogPrompt: _catalogPrompt, ...legacySnapshot } = skillsSnapshot;
+      skillsSnapshot = legacySnapshot;
+      if (params.separateRemoteNote)
+        skillsLogger.debug("Using established skills prompt for a legacy snapshot.");
     }
     // The established reader always receives base inputs; only the separated path
     // may consult live remote eligibility or remove the composed availability note.

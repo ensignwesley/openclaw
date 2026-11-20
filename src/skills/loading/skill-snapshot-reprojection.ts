@@ -1,29 +1,55 @@
 import type { SkillSnapshot } from "../types.js";
-import { formatSkillsForPromptBounded, prepareSkillsForPrompt } from "./skill-prompt-limits.js";
+import { hasUnavailableSkillSecretOwners, isSkillSecretOwnerUnavailable } from "./config.js";
+import {
+  formatSkillsForPromptBounded,
+  type prepareSkillsForPrompt,
+} from "./skill-prompt-limits.js";
 
-/** Remap only the admitted set, retaining the incoming legacy or separated shape. */
+export function hasUnavailableSnapshotSkillOwners(snapshot: SkillSnapshot): boolean {
+  return (
+    snapshot.skills.some((skill) => isSkillSecretOwnerUnavailable(skill.skillKey ?? skill.name)) ||
+    (snapshot.skills.some((skill) => !skill.skillKey) && hasUnavailableSkillSecretOwners())
+  );
+}
+
+/** Every delivery/preparation/reader boundary uses this same input classification. */
+export function classifySkillSnapshot(snapshot: SkillSnapshot): "legacy" | "separated" {
+  // Empty prompts retain base silence, even when a stored note and empty pair exist.
+  return !snapshot.prompt.trim() ||
+    !hasCurrentSkillSnapshotProjection(snapshot) ||
+    hasUnavailableSnapshotSkillOwners(snapshot)
+    ? "legacy"
+    : "separated";
+}
+
+/** Remap only the admitted set, retaining the input class and availability carrier. */
 export function reprojectSkillSnapshot(
   snapshot: SkillSnapshot,
   resolvedSkills: NonNullable<SkillSnapshot["resolvedSkills"]>,
   options: Omit<Parameters<typeof prepareSkillsForPrompt>[0], "skills" | "remoteNote"> = {},
 ): SkillSnapshot {
-  const renderOptions = { skills: resolvedSkills, preserveOrder: true, ...options };
-  if (hasCurrentSkillSnapshotProjection(snapshot)) {
-    const prepared = prepareSkillsForPrompt({ ...renderOptions, remoteNote: snapshot.remoteNote });
-    return {
-      ...snapshot,
-      resolvedSkills,
-      prompt: prepared.prompt,
-      catalogPrompt: prepared.catalogPrompt,
-    };
+  const inputClass = classifySkillSnapshot(snapshot);
+  const catalog = formatSkillsForPromptBounded({
+    skills: resolvedSkills,
+    preserveOrder: true,
+    ...options,
+  });
+  if (inputClass === "legacy") {
+    const { catalogPrompt: _catalogPrompt, ...legacy } = snapshot;
+    return { ...legacy, resolvedSkills, prompt: catalog };
   }
-  // Base remapping does not carry an availability prefix. Do not infer or promote old snapshots.
-  const { catalogPrompt: _catalogPrompt, ...legacySnapshot } = snapshot;
-  return { ...legacySnapshot, resolvedSkills, prompt: formatSkillsForPromptBounded(renderOptions) };
+  // P carries exactly the input's admitted prefix plus the remapped catalog; never re-budget the note.
+  const carriedNote = snapshot.prompt === snapshot.catalogPrompt ? undefined : snapshot.remoteNote;
+  return {
+    ...snapshot,
+    resolvedSkills,
+    catalogPrompt: catalog,
+    prompt: carriedNote ? (catalog ? `${carriedNote}\n${catalog}` : carriedNote) : catalog,
+  };
 }
 
 /** Pair consistency is not proof that the strings describe the admitted delivery. */
-export function hasCurrentSkillSnapshotProjection(snapshot: SkillSnapshot): boolean {
+function hasCurrentSkillSnapshotProjection(snapshot: SkillSnapshot): boolean {
   if (typeof snapshot.catalogPrompt !== "string") return false;
   const catalog = snapshot.catalogPrompt;
   if (snapshot.prompt === catalog) return true;

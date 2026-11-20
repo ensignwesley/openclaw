@@ -1,0 +1,106 @@
+{
+  "both-empty--none--available": {
+    "catalogBytes": "",
+    "availability": []
+  },
+  "both-empty--none--unavailable": {
+    "catalogBytes": "",
+    "availability": []
+  },
+  "both-empty--sandbox--available": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>cold</name>\n    <description>Matrix cold instructions</description>\n    <location>/workspace/.openclaw/sandbox-skills/skills/cold/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/workspace/.openclaw/sandbox-skills/skills/healthy/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "both-empty--sandbox--unavailable": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/workspace/.openclaw/sandbox-skills/skills/healthy/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "both-empty--worker--available": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>cold</name>\n    <description>Matrix cold instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/worker/openclaw-inbound-22222222-2222-4222-8222-222222222222/0/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/worker/openclaw-inbound-22222222-2222-4222-8222-222222222222/1/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "both-empty--worker--unavailable": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/worker/openclaw-inbound-22222222-2222-4222-8222-222222222222/1/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "no-pair--none--available": {
+    "catalogBytes": "Remote macOS node available (Matrix Mac). Run macOS-only skills via exec host=node on that node.\n\n\nThe following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>cold</name>\n    <description>Matrix cold instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/host/skills/cold/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/host/skills/healthy/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": [
+      "Remote macOS node available (Matrix Mac). Run macOS-only skills via exec host=node on that node."
+    ]
+  },
+  "no-pair--none--unavailable": {
+    "catalogBytes": "Remote macOS node available (Matrix Mac). Run macOS-only skills via exec host=node on that node.\n\n\nThe following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/host/skills/healthy/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": [
+      "Remote macOS node available (Matrix Mac). Run macOS-only skills via exec host=node on that node."
+    ]
+  },
+  "no-pair--sandbox--available": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>cold</name>\n    <description>Matrix cold instructions</description>\n    <location>/workspace/.openclaw/sandbox-skills/skills/cold/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/workspace/.openclaw/sandbox-skills/skills/healthy/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "no-pair--sandbox--unavailable": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/workspace/.openclaw/sandbox-skills/skills/healthy/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "no-pair--worker--available": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>cold</name>\n    <description>Matrix cold instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/worker/openclaw-inbound-22222222-2222-4222-8222-222222222222/0/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/worker/openclaw-inbound-22222222-2222-4222-8222-222222222222/1/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "no-pair--worker--unavailable": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/worker/openclaw-inbound-22222222-2222-4222-8222-222222222222/1/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "pair-no-note--none--available": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>cold</name>\n    <description>Matrix cold instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/host/skills/cold/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/host/skills/healthy/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "pair-no-note--none--unavailable": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/host/skills/healthy/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "pair-no-note--sandbox--available": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>cold</name>\n    <description>Matrix cold instructions</description>\n    <location>/workspace/.openclaw/sandbox-skills/skills/cold/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/workspace/.openclaw/sandbox-skills/skills/healthy/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "pair-no-note--sandbox--unavailable": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/workspace/.openclaw/sandbox-skills/skills/healthy/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "pair-no-note--worker--available": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>cold</name>\n    <description>Matrix cold instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/worker/openclaw-inbound-22222222-2222-4222-8222-222222222222/0/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/worker/openclaw-inbound-22222222-2222-4222-8222-222222222222/1/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "pair-no-note--worker--unavailable": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/worker/openclaw-inbound-22222222-2222-4222-8222-222222222222/1/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "pair-note--none--available": {
+    "catalogBytes": "Remote macOS node available (Matrix Mac). Run macOS-only skills via exec host=node on that node.\n\n\nThe following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>cold</name>\n    <description>Matrix cold instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/host/skills/cold/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/host/skills/healthy/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": [
+      "Remote macOS node available (Matrix Mac). Run macOS-only skills via exec host=node on that node."
+    ]
+  },
+  "pair-note--none--unavailable": {
+    "catalogBytes": "Remote macOS node available (Matrix Mac). Run macOS-only skills via exec host=node on that node.\n\n\nThe following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/host/skills/healthy/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": [
+      "Remote macOS node available (Matrix Mac). Run macOS-only skills via exec host=node on that node."
+    ]
+  },
+  "pair-note--sandbox--available": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>cold</name>\n    <description>Matrix cold instructions</description>\n    <location>/workspace/.openclaw/sandbox-skills/skills/cold/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/workspace/.openclaw/sandbox-skills/skills/healthy/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "pair-note--sandbox--unavailable": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/workspace/.openclaw/sandbox-skills/skills/healthy/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "pair-note--worker--available": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>cold</name>\n    <description>Matrix cold instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/worker/openclaw-inbound-22222222-2222-4222-8222-222222222222/0/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/worker/openclaw-inbound-22222222-2222-4222-8222-222222222222/1/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  },
+  "pair-note--worker--unavailable": {
+    "catalogBytes": "The following skills provide specialized instructions for specific tasks.\nRead a skill's file at its listed location when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>healthy</name>\n    <description>Matrix healthy instructions</description>\n    <location>/tmp/row-a-snapshot-class-table/worker/openclaw-inbound-22222222-2222-4222-8222-222222222222/1/SKILL.md</location>\n  </skill>\n</available_skills>",
+    "availability": []
+  }
+}

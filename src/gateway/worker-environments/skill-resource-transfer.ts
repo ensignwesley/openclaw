@@ -295,20 +295,16 @@ export async function transferSkillResources(params: {
     check();
     return {
       source: params.snapshot,
-      snapshot: reprojectSkillSnapshot(
-        {
-          ...params.snapshot,
-          skills,
-          resolvedSkills,
-          discoverySkills: [
-            ...deliveredSkills.filter((skill) => !skill.disableModelInvocation),
-            ...(params.snapshot.discoverySkills ?? resolvedSkills).filter(
-              (skill) => skill.filePath.startsWith("node://") && !skill.disableModelInvocation,
-            ),
-          ],
-        },
-        resolvedSkills,
-      ),
+      snapshot: {
+        ...reprojectSkillSnapshot(params.snapshot, resolvedSkills),
+        skills,
+        discoverySkills: [
+          ...deliveredSkills.filter((skill) => !skill.disableModelInvocation),
+          ...(params.snapshot.discoverySkills ?? resolvedSkills).filter(
+            (skill) => skill.filePath.startsWith("node://") && !skill.disableModelInvocation,
+          ),
+        ],
+      },
       mounts,
       assertCurrent: check,
       cleanup,

@@ -7,7 +7,10 @@ import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { hasUnavailableSkillSecretOwners, isSkillSecretOwnerUnavailable } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { compactSkillsPromptForContext, escapeSkillXml } from "./skill-contract.js";
-import { hasCurrentSkillSnapshotProjection } from "./skill-snapshot-reprojection.js";
+import {
+  classifySkillSnapshot,
+  hasUnavailableSnapshotSkillOwners,
+} from "./skill-snapshot-reprojection.js";
 import { resolveWorkspaceSkillPromptEntries } from "./workspace-skill-loader.js";
 
 const skillsLogger = createSubsystemLogger("skills");
@@ -104,33 +107,12 @@ async function rebuildAfterUnsafeSnapshot(
   return buildSkillsPromptFromEntries(params, entries);
 }
 
-function hasUnavailableSnapshotSkillOwners(snapshot: SkillSnapshot): boolean {
-  return (
-    snapshot.skills.some((skill) => isSkillSecretOwnerUnavailable(skill.skillKey ?? skill.name)) ||
-    (snapshot.skills.some((skill) => !skill.skillKey) && hasUnavailableSkillSecretOwners())
-  );
-}
-
-/** Legacy snapshots and degraded-owner decisions retain the established reader. */
-export function shouldPreserveLegacySkillSnapshotPrompt(snapshot: SkillSnapshot): boolean {
-  // Empty prompts keep base silence: separating would add a turn availability fact.
-  return (
-    !snapshot.prompt.trim() ||
-    hasUnavailableSnapshotSkillOwners(snapshot) ||
-    !hasCurrentSkillSnapshotProjection(snapshot)
-  );
-}
-
 async function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): Promise<string> {
   const snapshot = params.skillsSnapshot;
-  if (params.separateRemoteNote && snapshot && shouldPreserveLegacySkillSnapshotPrompt(snapshot)) {
+  if (params.separateRemoteNote && snapshot && classifySkillSnapshot(snapshot) === "legacy") {
     params.assertCurrent?.();
     params.onLegacyPromptFallback?.();
-    if (!hasCurrentSkillSnapshotProjection(snapshot)) {
-      skillsLogger.debug(
-        "Using legacy skills prompt for a snapshot without a valid separated pair.",
-      );
-    }
+    skillsLogger.debug("Using established skills prompt for a legacy snapshot.");
     return readSkillsPromptCatalog({ ...params, separateRemoteNote: false });
   }
   return readSkillsPromptCatalog(params);

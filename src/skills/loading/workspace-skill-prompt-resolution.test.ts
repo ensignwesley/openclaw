@@ -320,18 +320,23 @@ for (const state of [
         createEntry("b", "More guidance. ".repeat(100)),
       ];
       const snapshot = await snapshotOf(entries);
-      const projected = reprojection.reprojectSkillSnapshot(
-        { ...snapshot, remoteNote: note },
-        snapshot.resolvedSkills!,
-        options,
-      );
-      expect(reprojection.hasCurrentSkillSnapshotProjection(projected)).toBe(true);
+      const projection = await import("./skill-prompt-limits.js");
+      const projected = {
+        ...snapshot,
+        ...projection.prepareSkillsForPrompt({
+          skills: snapshot.resolvedSkills!,
+          remoteNote: note,
+          ...options,
+        }),
+        remoteNote: note,
+      };
+      expect(() => reprojection.assertCurrentSkillSnapshotProjection(projected)).not.toThrow();
     }
     const empty = await snapshotOf([]);
     const noteOnly = reprojection.reprojectSkillSnapshot({ ...empty, remoteNote: note }, []);
-    expect(noteOnly.prompt).toBe(note ?? "");
-    expect(noteOnly.catalogPrompt).toBe("");
-    expect(reprojection.hasCurrentSkillSnapshotProjection(noteOnly)).toBe(true);
+    expect(noteOnly.prompt).toBe("");
+    expect(noteOnly.catalogPrompt).toBeUndefined();
+    expect(reprojection.classifySkillSnapshot(noteOnly)).toBe("legacy");
   });
 }
 
@@ -347,7 +352,7 @@ it("keeps remapping owners' legacy formatter bytes unchanged inside and beyond d
     expect(projected.prompt).toBe(
       formatSkillsForPromptBounded({ skills: resolved, preserveOrder: true }),
     );
-    expect(reprojection.hasCurrentSkillSnapshotProjection(projected)).toBe(true);
+    expect(() => reprojection.assertCurrentSkillSnapshotProjection(projected)).not.toThrow();
   }
 });
 
@@ -356,10 +361,10 @@ it("uses pair shape rather than format version and never promotes a legacy remap
   const resolved = snapshot.resolvedSkills!;
   for (const version of [undefined, 7, 8]) {
     const paired = { ...snapshot, promptFormatVersion: version };
-    expect(reprojection.hasCurrentSkillSnapshotProjection(paired)).toBe(true);
+    expect(() => reprojection.assertCurrentSkillSnapshotProjection(paired)).not.toThrow();
     const remapped = reprojection.reprojectSkillSnapshot(paired, resolved);
     expect(remapped.promptFormatVersion).toBe(version);
-    expect(reprojection.hasCurrentSkillSnapshotProjection(remapped)).toBe(true);
+    expect(() => reprojection.assertCurrentSkillSnapshotProjection(remapped)).not.toThrow();
     const { catalogPrompt: _catalogPrompt, ...legacy } = paired;
     const retained = reprojection.reprojectSkillSnapshot(legacy, resolved);
     expect(retained.catalogPrompt).toBeUndefined();
