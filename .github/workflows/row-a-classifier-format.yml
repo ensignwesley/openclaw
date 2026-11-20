@@ -1,0 +1,49 @@
+name: Row A final sandbox exact-head regression and formatting
+on:
+  push:
+    branches: [proof/row-a-classifier-format-20261120]
+defaults:
+  run:
+    shell: bash
+permissions:
+  contents: read
+jobs:
+  final:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          ref: 2c07796f01b00b63725f73b795418dc9cd18d9f0
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Check all own-change formatting and final sandbox model request
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-classifier-format-exact
+        run: |
+          set -euo pipefail
+          mkdir -p "$ROW_A_RECEIPTS_DIR"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
+          git fetch --no-tags --depth=1 origin 53633171bf52fddf2abe3c5549b97320febb2677
+          mapfile -t files < <(git diff --name-only 53633171bf52fddf2abe3c5549b97320febb2677 HEAD -- '*.ts' '*.mjs' '*.mts')
+          printf '%s\n' "${files[@]}" > "$ROW_A_RECEIPTS_DIR/changed-source-files.txt"
+          sha256sum "${files[@]}" > "$ROW_A_RECEIPTS_DIR/before.sha256"
+          corepack pnpm exec oxfmt --check "${files[@]}" 2>&1 | tee "$ROW_A_RECEIPTS_DIR/format-check.log"
+          node scripts/run-vitest.mjs src/skills/runtime/remote-note-review.integration.test.ts src/skills/runtime/snapshot-class-table.integration.test.ts src/skills/runtime/embedded-run-entries.test.ts src/skills/runtime/legacy-precedence.integration.test.ts src/skills/runtime/separated-recovery.integration.test.ts src/skills/runtime/sandbox-v8-library.integration.test.ts src/gateway/worker-environments/worker-skill-prefix.integration.test.ts --maxWorkers=1 2>&1 | tee "$ROW_A_RECEIPTS_DIR/exact-tests.log"
+          sha256sum "${files[@]}" > "$ROW_A_RECEIPTS_DIR/after.sha256"
+          cmp "$ROW_A_RECEIPTS_DIR/before.sha256" "$ROW_A_RECEIPTS_DIR/after.sha256"
+          git diff --exit-code HEAD
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/final-head.txt"
+      - name: Preserve final proof
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: row-a-classifier-format-exact-${{ github.sha }}
+          path: ${{ runner.temp }}/row-a-classifier-format-exact
+          if-no-files-found: error
+          retention-days: 30
