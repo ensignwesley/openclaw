@@ -1,0 +1,78 @@
+name: Row A exact-head format native lint and gated types
+on:
+  push:
+    branches: [proof/row-a-fresh-response-format-lint-types-20261120]
+defaults:
+  run:
+    shell: bash
+permissions:
+  contents: read
+jobs:
+  final:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          ref: d47aff73a21bd55b564cf2768b03fb2d85f4f03f
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Check all own-change formatting and final sandbox model request
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-classifier-format-exact
+        run: |
+          set -euo pipefail
+          mkdir -p "$ROW_A_RECEIPTS_DIR"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
+          git fetch --no-tags --depth=1 origin 53633171bf52fddf2abe3c5549b97320febb2677
+          mapfile -t files < <(git diff --name-only 53633171bf52fddf2abe3c5549b97320febb2677 HEAD -- '*.ts' '*.mjs' '*.mts')
+          printf '%s\n' "${files[@]}" > "$ROW_A_RECEIPTS_DIR/changed-source-files.txt"
+          sha256sum "${files[@]}" > "$ROW_A_RECEIPTS_DIR/before.sha256"
+          set +e
+          corepack pnpm exec oxfmt --check "${files[@]}" 2>&1 | tee "$ROW_A_RECEIPTS_DIR/format-check.log"
+          format_status=${PIPESTATUS[0]}
+          echo "$format_status" > "$ROW_A_RECEIPTS_DIR/format.exit"
+          if [ "$format_status" != 0 ]; then exit "$format_status"; fi
+          node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/attempt-prompt-context.test.ts src/skills/runtime/remote-note-review.integration.test.ts src/skills/runtime/snapshot-class-table.integration.test.ts src/skills/runtime/embedded-run-entries.test.ts src/skills/runtime/legacy-precedence.integration.test.ts src/skills/runtime/separated-recovery.integration.test.ts src/skills/runtime/sandbox-v8-library.integration.test.ts src/gateway/worker-environments/worker-skill-prefix.integration.test.ts --maxWorkers=1 2>&1 | tee "$ROW_A_RECEIPTS_DIR/exact-tests.log"
+          exact_status=${PIPESTATUS[0]}
+          echo "$exact_status" > "$ROW_A_RECEIPTS_DIR/exact.exit"
+          if [ "$exact_status" != 0 ]; then exit "$exact_status"; fi
+          set -e
+          sha256sum "${files[@]}" > "$ROW_A_RECEIPTS_DIR/after.sha256"
+          cmp "$ROW_A_RECEIPTS_DIR/before.sha256" "$ROW_A_RECEIPTS_DIR/after.sha256"
+          git diff --exit-code HEAD
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/final-head.txt"
+      - name: Native touched-file core lint then production and test types
+        env:
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-classifier-format-exact
+          GOMAXPROCS: "2"
+        run: |
+          set -euo pipefail
+          files_json=$(python3 -c 'import pathlib,json,os; print(json.dumps(pathlib.Path(os.environ["ROW_A_RECEIPTS_DIR"]).joinpath("changed-source-files.txt").read_text().splitlines()))')
+          set +e
+          node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --threads=1 --files-json "$files_json" 2>&1 | tee "$ROW_A_RECEIPTS_DIR/native-lint.log"
+          lint_status=${PIPESTATUS[0]}
+          echo "$lint_status" > "$ROW_A_RECEIPTS_DIR/native-lint.exit"
+          if [ "$lint_status" != 0 ]; then exit "$lint_status"; fi
+          corepack pnpm tsgo:core 2>&1 | tee "$ROW_A_RECEIPTS_DIR/core.log"
+          core_status=${PIPESTATUS[0]}
+          echo "$core_status" > "$ROW_A_RECEIPTS_DIR/core.exit"
+          if [ "$core_status" != 0 ]; then exit "$core_status"; fi
+          corepack pnpm tsgo:core:test 2>&1 | tee "$ROW_A_RECEIPTS_DIR/core-test.log"
+          test_status=${PIPESTATUS[0]}
+          echo "$test_status" > "$ROW_A_RECEIPTS_DIR/core-test.exit"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/types-final-head.txt"
+          exit "$test_status"
+      - name: Preserve final proof
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: row-a-classifier-format-exact-${{ github.sha }}
+          path: ${{ runner.temp }}/row-a-classifier-format-exact
+          if-no-files-found: error
+          retention-days: 30
