@@ -11,6 +11,7 @@ import {
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import { setActiveNodeContexts } from "../../../infra/active-node-context.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { classifySkillSnapshot } from "../../../skills/loading/skill-snapshot-reprojection.js";
 import { addSession, appendOutput, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
@@ -103,6 +104,7 @@ function createInput(options?: {
   return {
     input: {
       attempt,
+      preparedSkills: undefined as Parameters<typeof prepareContext>[0]["preparedSkills"],
       capabilityToolNames: new Set<string>(),
       includeBoundaryTimestamp: false,
       isRawModelRun: false,
@@ -150,7 +152,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
   registerParityHostLifecycle();
 
   it.each([true, false])(
-    "carries remote skills availability only with admitted node exec: %s",
+    "does not overlay an inconsistent legacy pair with node exec: %s",
     async (canExec) => {
       const note =
         "Remote macOS node available (proof). Run macOS-only skills via exec host=node on that node.";
@@ -165,14 +167,19 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
           },
         }),
       });
+      input.preparedSkills = {
+        skillsSnapshotForRun: input.attempt.skillsSnapshot,
+        legacySkillsPromptFallback:
+          classifySkillSnapshot(input.attempt.skillsSnapshot!) === "legacy",
+      };
       input.capabilityToolNames = new Set(["read"]);
       const result = await prepareContext(input);
       expect(result.systemPromptForHook).toBe(input.systemPromptText);
-      if (canExec) {
-        expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(note);
-      } else {
-        expect(result.runtimeContextMessageForCurrentTurn?.content).not.toContain(note);
-      }
+      expect(input.preparedSkills.legacySkillsPromptFallback).toBe(true);
+      expect(result.runtimeContextMessageForCurrentTurn?.content).not.toContain(note);
+      expect(result.runtimeContextMessageForCurrentTurn?.content).not.toContain(
+        "Remote macOS execution is unavailable for this turn.",
+      );
     },
   );
 
@@ -187,6 +194,10 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
         },
       }),
     });
+    input.preparedSkills = {
+      skillsSnapshotForRun: input.attempt.skillsSnapshot,
+      legacySkillsPromptFallback: classifySkillSnapshot(input.attempt.skillsSnapshot!) === "legacy",
+    };
     input.capabilityToolNames = new Set(["read"]);
     const result = await prepareContext(input);
     expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(

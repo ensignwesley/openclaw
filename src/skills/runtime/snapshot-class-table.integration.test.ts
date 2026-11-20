@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
   captureAnthropicExchange,
   registerParityHostLifecycle,
@@ -12,11 +13,13 @@ import { prepareEmbeddedSkills } from "../../agents/embedded-agent-runner/skill-
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { createReadTool } from "../../agents/sessions/tools/read.js";
 import { createAgentToolsSandboxContext } from "../../agents/test-helpers/agent-tools-sandbox-context.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   setRuntimeConfigSnapshot,
   clearRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { transferSkillResources } from "../../gateway/worker-environments/skill-resource-transfer.js";
+import { prepareWorkerTurnPrompt } from "../../gateway/worker-environments/worker-turn-prompt.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { parseSkillsPromptCatalog } from "../loading/skill-prompt-catalog.js";
@@ -30,6 +33,94 @@ vi.mock("node:crypto", async (load) => ({
   ...(await load<typeof import("node:crypto")>()),
   randomUUID: () => "22222222-2222-4222-8222-222222222222",
 }));
+// mock-isolation: Exercise the real worker caller, system renderer and context composer,
+// without admitting a real session, filesystem bootstrap, plugin hook or context engine.
+vi.mock("../../agents/embedded-agent-runner/run/attempt-bootstrap-prepare.js", async (load) => ({
+  ...(await load<
+    typeof import("../../agents/embedded-agent-runner/run/attempt-bootstrap-prepare.js")
+  >()),
+  prepareEmbeddedAttemptBootstrap: async () => ({}),
+}));
+vi.mock("../../agents/prompt-projects.js", async (load) => ({
+  ...(await load<typeof import("../../agents/prompt-projects.js")>()),
+  prepareAgentPromptProjects: async () => ({}),
+}));
+vi.mock(
+  "../../agents/embedded-agent-runner/run/attempt-system-prompt-additions.js",
+  async (load) => ({
+    ...(await load<
+      typeof import("../../agents/embedded-agent-runner/run/attempt-system-prompt-additions.js")
+    >()),
+    prepareAttemptSystemPromptAdditions: async () => ({}),
+  }),
+);
+vi.mock(
+  "../../agents/embedded-agent-runner/run/attempt-system-prompt-prepare.js",
+  async (load) => ({
+    ...(await load<
+      typeof import("../../agents/embedded-agent-runner/run/attempt-system-prompt-prepare.js")
+    >()),
+    prepareEmbeddedAttemptSystemPrompt: async (input: {
+      skillsPrompt: string;
+      setup: { effectiveWorkspace: string };
+      attempt: { config: OpenClawConfig };
+    }) => {
+      const rendered = await buildAttemptSystemPrompt({
+        isRawModelRun: false,
+        transformSystemPrompt: (text) => text,
+        embeddedSystemPrompt: {
+          config: input.attempt.config,
+          workspaceDir: input.setup.effectiveWorkspace,
+          skillsPrompt: input.skillsPrompt,
+          toolNames: ["read"],
+          runtimeInfo: { agentId: "main", host: "synthetic-legacy", model: "fixture/model" },
+        },
+      });
+      return { systemPromptText: rendered.systemPrompt };
+    },
+  }),
+);
+vi.mock("../../agents/embedded-agent-runner/run/attempt-transcript-helpers.js", async (load) => ({
+  ...(await load<
+    typeof import("../../agents/embedded-agent-runner/run/attempt-transcript-helpers.js")
+  >()),
+  resolveExistingAttemptTranscriptState: async () => ({ hasBootstrapTranscriptState: false }),
+}));
+vi.mock("../../agents/agent-project-settings.js", async (load) => ({
+  ...(await load<typeof import("../../agents/agent-project-settings.js")>()),
+  createPreparedEmbeddedAgentSettingsManager: () => ({ getCompactionReserveTokens: () => 0 }),
+}));
+vi.mock("../../agents/harness/context-engine-lifecycle.js", async (load) => ({
+  ...(await load<typeof import("../../agents/harness/context-engine-lifecycle.js")>()),
+  bootstrapHarnessContextEngine: async () => {},
+  prepareHarnessContextEnginePrompt: async (input: {
+    messages: unknown[];
+    promptBudget: { systemPrompt: string };
+  }) => ({
+    messages: input.messages,
+    systemPrompt: input.promptBudget.systemPrompt,
+  }),
+}));
+vi.mock("../../agents/embedded-agent-runner/run/attempt-prompt-build.js", async (load) => ({
+  ...(await load<
+    typeof import("../../agents/embedded-agent-runner/run/attempt-prompt-build.js")
+  >()),
+  prepareEmbeddedAttemptPromptAssembly: async () => ({
+    effectivePrompt: "Use only admitted skills.",
+    effectiveTranscriptPrompt: "Use only admitted skills.",
+  }),
+}));
+let invocationRoot: string;
+let ownsInvocationRoot = false;
+beforeAll(async () => {
+  invocationRoot =
+    process.env.ROW_A_TABLE_ROOT ??
+    (await fs.mkdtemp(path.join(os.tmpdir(), "row-a-class-table-")));
+  ownsInvocationRoot = !process.env.ROW_A_TABLE_ROOT;
+});
+afterAll(async () => {
+  if (ownsInvocationRoot) await fs.rm(invocationRoot, { recursive: true, force: true });
+});
 registerParityHostLifecycle();
 function textStrings(value: unknown): string[] {
   if (typeof value === "string") return [value];
@@ -38,7 +129,7 @@ function textStrings(value: unknown): string[] {
   return [];
 }
 const shapes = ["no-pair", "both-empty", "pair-note", "pair-no-note"] as const;
-const paths = ["none", "sandbox", "worker"] as const;
+const paths = ["none", "sandbox", "worker", "worker-turn", "attempt-only"] as const;
 const ownerStates = ["available", "unavailable"] as const;
 const note =
   "Remote macOS node available (Matrix Mac). Run macOS-only skills via exec host=node on that node.";
@@ -49,11 +140,12 @@ for (const shape of shapes)
         `class table ${shape}/${route}/${owners}`,
         async () => {
           const id = `${shape}--${route}--${owners}`;
-          const root = "/tmp/row-a-snapshot-class-table";
+          const root = path.join(invocationRoot, id);
           let resources: Awaited<ReturnType<typeof transferSkillResources>>;
           try {
+            vi.useFakeTimers({ toFake: ["Date"] });
+            vi.setSystemTime(new Date("2026-11-20T11:15:00Z"));
             await withOpenClawTestState({ scenario: "minimal" }, async () => {
-              await fs.rm(root, { recursive: true, force: true });
               const workspace = path.join(root, "host");
               const remote = path.join(root, "worker");
               const materialized = path.join(root, "materialized");
@@ -175,15 +267,22 @@ for (const shape of shapes)
                 sessionId: "matrix",
                 sessionKey: "agent:main:matrix",
               };
-              const prepared = await prepareEmbeddedSkills({
-                separateRemoteNote: true,
-                applySkillEnvironment: false,
-                includeCodeModeSkills: false,
-                attempt,
-                effectiveWorkspace: workspace,
-                sandbox,
-                sessionAgentId: "main",
-              });
+              const prepared =
+                route === "worker-turn" || route === "attempt-only"
+                  ? {
+                      skillsPrompt: input.prompt,
+                      skillsSnapshotForRun: input,
+                      legacySkillsPromptFallback: true,
+                    }
+                  : await prepareEmbeddedSkills({
+                      separateRemoteNote: true,
+                      applySkillEnvironment: false,
+                      includeCodeModeSkills: false,
+                      attempt,
+                      effectiveWorkspace: workspace,
+                      sandbox,
+                      sessionAgentId: "main",
+                    });
               const rendered = await buildAttemptSystemPrompt({
                 isRawModelRun: false,
                 transformSystemPrompt: (s) => s,
@@ -199,9 +298,10 @@ for (const shape of shapes)
                   },
                 },
               });
-              const context = await prepareEmbeddedAttemptPromptContext({
+              const contextInput = {
                 attempt,
-                preparedSkills: prepared,
+                preparedSkills:
+                  route === "attempt-only" || route === "worker-turn" ? undefined : prepared,
                 capabilityToolNames: new Set(["read", "computer"]),
                 includeBoundaryTimestamp: false,
                 isRawModelRun: false,
@@ -220,12 +320,61 @@ for (const shape of shapes)
                   restoredCacheTtl: new Map(),
                   sourceHashByKey: new Map(),
                 },
-              });
+              };
+              const context = await prepareEmbeddedAttemptPromptContext(contextInput);
+              const workerResult =
+                route === "worker-turn"
+                  ? await prepareWorkerTurnPrompt({
+                      turn: {
+                        ...attempt,
+                        workspaceDir: workspace,
+                        bootstrapWorkspaceDir: workspace,
+                        prompt: "Use only admitted skills.",
+                        thinkLevel: "off",
+                        admittedRunContext: {},
+                      },
+                      agentId: "main",
+                      workspaceDir: workspace,
+                      preparedModelRuntime: { agentDir: path.join(root, "agent") },
+                      model: {
+                        provider: "fixture",
+                        id: "model",
+                        api: "anthropic-messages",
+                        contextWindow: 32000,
+                        maxTokens: 1000,
+                      },
+                      surface: {
+                        tools: [{ definition: { name: "read" } }],
+                        presentation: { codeMode: { enabled: false } },
+                      },
+                      toolRuntime: {
+                        getPromptProjection: async () => ({
+                          tools: [],
+                          toolSchemaDirectoryPrompt: undefined,
+                        }),
+                        applyPromptToolsAllow: () => ["read"],
+                      },
+                      identity: {},
+                      manager: { getHeader: () => ({ version: 3 }) },
+                      transcriptPolicy: {},
+                      history: [],
+                      contextEngine: {},
+                      assertCurrent: () => {},
+                    } as Parameters<typeof prepareWorkerTurnPrompt>[0])
+                  : undefined;
               const read = createReadTool(workspace);
               const exchange = await captureAnthropicExchange("transport", {
                 context: {
-                  systemPrompt: rendered.systemPrompt,
-                  messages: convertToLlm(context.hookMessagesForCurrentPrompt),
+                  systemPrompt: workerResult?.systemPromptText ?? rendered.systemPrompt,
+                  messages: workerResult
+                    ? [
+                        {
+                          role: "user",
+                          content: textStrings(workerResult.runtimeContext).join("\n"),
+                          timestamp: 0,
+                        },
+                      ]
+                    : convertToLlm(context.hookMessagesForCurrentPrompt),
                   tools: [
                     { name: read.name, description: read.description, parameters: read.parameters },
                   ],
@@ -244,7 +393,16 @@ for (const shape of shapes)
                 .flatMap((s) => s.split("\n"))
                 .filter((s) => s.startsWith("Remote macOS "));
 
-              const observed = { catalogBytes: prepared.skillsPrompt, availability };
+              const workerSystemPrompt = workerResult?.systemPromptText;
+              const turnContext = workerResult
+                ? textStrings(workerResult.runtimeContext).join("\n")
+                : textStrings(context.runtimeContextFragments).join("\n");
+              const observed = {
+                catalogBytes: prepared.skillsPrompt,
+                availability,
+                ...(workerSystemPrompt === undefined ? {} : { workerSystemPrompt }),
+                ...(route === "worker-turn" || route === "attempt-only" ? { turnContext } : {}),
+              };
               const output = process.env.ROW_A_RECEIPTS_DIR;
               if (output) {
                 await fs.mkdir(output, { recursive: true });
@@ -253,6 +411,7 @@ for (const shape of shapes)
                   JSON.stringify(
                     {
                       id,
+                      invocationRoot,
                       shape,
                       route,
                       owners,
@@ -270,6 +429,7 @@ for (const shape of shapes)
                 );
               }
               if (process.env.ROW_A_BASELINE !== "1") {
+                const ordinaryRoute = route !== "worker-turn" && route !== "attempt-only";
                 const base = process.env.ROW_A_BASE_RECEIPTS
                   ? JSON.parse(
                       await fs.readFile(
@@ -277,15 +437,36 @@ for (const shape of shapes)
                         "utf8",
                       ),
                     )
-                  : JSON.parse(
-                      await fs.readFile(
-                        new URL("./fixtures/snapshot-class-table-base.json", import.meta.url),
-                        "utf8",
-                      ),
-                    )[id];
+                  : ordinaryRoute
+                    ? JSON.parse(
+                        (
+                          await fs.readFile(
+                            new URL("./fixtures/snapshot-class-table-base.json", import.meta.url),
+                            "utf8",
+                          )
+                        ).replaceAll("/tmp/row-a-snapshot-class-table", root),
+                      )[id]
+                    : undefined;
+                // Standalone expected fixture paths expand synthetic inputs, never captured bytes.
+                // Hosted base/candidate runs compare fresh raw strings with the same owned root.
                 const legacy =
                   shape === "no-pair" || shape === "both-empty" || owners === "unavailable";
-                if (legacy) {
+                if (route === "worker-turn" || route === "attempt-only") {
+                  if (base)
+                    expect.soft(observed).toEqual({
+                      catalogBytes: base.catalogBytes,
+                      availability: base.availability,
+                      ...(base.workerSystemPrompt === undefined
+                        ? {}
+                        : { workerSystemPrompt: base.workerSystemPrompt }),
+                      turnContext: base.turnContext,
+                    });
+                  expect.soft(turnContext).not.toContain("Remote macOS ");
+                  if (route === "worker-turn" && shape === "pair-note" && owners === "available") {
+                    expect.soft(availability).toEqual([note]);
+                    expect.soft(workerSystemPrompt?.split(note).length).toBe(2);
+                  }
+                } else if (legacy) {
                   expect.soft(observed.catalogBytes).toBe(base.catalogBytes);
                   expect.soft(observed.availability).toEqual(base.availability);
                   expect.soft(prepared.skillsSnapshotForRun?.catalogPrompt).toBeUndefined();
@@ -316,10 +497,10 @@ for (const shape of shapes)
             });
           } finally {
             await resources?.cleanup();
-            await fs.rm(root, { recursive: true, force: true });
             removeRemoteNodeInfo("matrix-mac");
             setSkillsRemoteRegistry(null);
             setActiveDegradedSecretOwners([]);
+            vi.useRealTimers();
             vi.restoreAllMocks();
             vi.unstubAllGlobals();
             vi.unstubAllEnvs();

@@ -406,7 +406,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     Awaited<ReturnType<typeof prepareEmbeddedSkills>>,
     "skillsSnapshotForRun"
   > & {
-    legacySkillsPromptFallback?: boolean;
+    legacySkillsPromptFallback: boolean;
   };
   boundaryTimezone?: string;
   includeBoundaryTimestamp: boolean;
@@ -545,11 +545,9 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       kind: "conversation-data",
       text: buildActiveNodeContextText(profileId),
     });
-    const snapshot = input.preparedSkills
-      ? input.preparedSkills.skillsSnapshotForRun
-      : attempt.skillsSnapshot;
+    const snapshot = input.preparedSkills?.skillsSnapshotForRun;
     if (
-      !input.preparedSkills?.legacySkillsPromptFallback &&
+      input.preparedSkills?.legacySkillsPromptFallback === false &&
       snapshot?.nodeSkillsEligibility?.canExec &&
       canAccessSkills({
         availableTools: input.capabilityToolNames,
