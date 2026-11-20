@@ -1,0 +1,44 @@
+name: Row A exact-head production and core-test types
+on:
+  push:
+    branches: [proof/row-a-final-types-20261120]
+permissions:
+  contents: read
+jobs:
+  types:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          ref: efad9840cb0924912a5b8dbc10c1950bd35b1363
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Production then core-test type graphs
+        run: |
+          mkdir -p "$RUNNER_TEMP/row-a-types"
+          git rev-parse HEAD > "$RUNNER_TEMP/row-a-types/owner-head.txt"
+          set -uo pipefail
+          set +e
+          corepack pnpm tsgo:core 2>&1 | tee "$RUNNER_TEMP/row-a-types/core.log"
+          core_status=${PIPESTATUS[0]}
+          echo "$core_status" > "$RUNNER_TEMP/row-a-types/core.exit"
+          if [ "$core_status" != 0 ]; then exit "$core_status"; fi
+          corepack pnpm tsgo:core:test 2>&1 | tee "$RUNNER_TEMP/row-a-types/core-test.log"
+          test_status=${PIPESTATUS[0]}
+          echo "$test_status" > "$RUNNER_TEMP/row-a-types/core-test.exit"
+          git rev-parse HEAD > "$RUNNER_TEMP/row-a-types/final-head.txt"
+          git status --porcelain > "$RUNNER_TEMP/row-a-types/final-status.txt"
+          exit "$test_status"
+      - name: Preserve type receipts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: row-a-types-${{ github.sha }}
+          path: ${{ runner.temp }}/row-a-types
+          if-no-files-found: error
+          retention-days: 30
