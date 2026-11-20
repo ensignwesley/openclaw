@@ -2,10 +2,7 @@ import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { prepareSkillLibrarySelection } from "../../skills/library/selection.js";
-import {
-  assertCurrentSkillSnapshotProjection,
-  classifySkillSnapshot,
-} from "../../skills/loading/skill-snapshot-reprojection.js";
+import { classifySkillSnapshot } from "../../skills/loading/skill-snapshot-reprojection.js";
 import {
   buildSkillSnapshot,
   resolveSkillsPrompt,
@@ -119,9 +116,6 @@ export async function prepareEmbeddedSkills(params: {
         preserveEntryOrder,
         assertCurrent: params.assertCurrent,
       });
-      if (params.separateRemoteNote) {
-        assertCurrentSkillSnapshotProjection(skillsSnapshot);
-      }
     }
     const inputClass = classifySkillSnapshot(skillsSnapshot);
     let legacySkillsPromptFallback = Boolean(params.separateRemoteNote && inputClass === "legacy");

@@ -528,3 +528,86 @@ for (const shape of shapes) {
     }
   }
 }
+
+// Fresh base-shaped builder results use the same legacy contract as delivered snapshots.
+it.skipIf(process.platform === "win32")(
+  "class table fresh-build/base-shaped/available",
+  async () => {
+    const id = "fresh-build--base-shaped--available";
+    const workspace = path.join(invocationRoot, id);
+    try {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await fs.mkdir(workspace, { recursive: true });
+        vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", path.join(workspace, "empty-skills"));
+        vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(workspace, "empty-plugins"));
+        const config = { plugins: { enabled: false }, agents: { defaults: { workspace } } };
+        setRuntimeConfigSnapshot(config);
+        const builder = await import("../loading/workspace-skill-prompt.js");
+        const snapshot = { prompt: "", skills: [], resolvedSkills: [], discoverySkills: [] };
+        const build = vi.spyOn(builder, "buildSkillSnapshot").mockResolvedValueOnce(snapshot);
+        const prepared = await prepareEmbeddedSkills({
+          separateRemoteNote: true,
+          applySkillEnvironment: false,
+          includeCodeModeSkills: false,
+          attempt: { config },
+          effectiveWorkspace: workspace,
+          sandbox: undefined,
+          sessionAgentId: "main",
+        });
+        expect(build).toHaveBeenCalledOnce();
+        const context = await prepareEmbeddedAttemptPromptContext({
+          attempt: { config, sessionId: "fresh-build", sessionKey: "agent:main:fresh-build" },
+          preparedSkills: prepared,
+          capabilityToolNames: new Set(["read", "computer"]),
+          includeBoundaryTimestamp: false,
+          isRawModelRun: false,
+          messages: [],
+          prompt: { effectivePrompt: "Read skills.", effectiveTranscriptPrompt: "Read skills." },
+          replaceSessionMessages: () => {},
+          sessionAgentId: "main",
+          systemPromptText: prepared.skillsPrompt,
+          toolResultPromptProjectionState: {
+            replacements: new Map(),
+            frozen: new Set(),
+            ambiguousBaseKeys: new Set(),
+            restoredCacheTtl: new Map(),
+            sourceHashByKey: new Map(),
+          },
+        });
+        const availability = textStrings(context.runtimeContextFragments)
+          .flatMap((text) => text.split("\n"))
+          .filter((text) => text.startsWith("Remote macOS "));
+        const observed = {
+          id,
+          invocationRoot,
+          inputClass: "legacy",
+          route: "fresh-build",
+          catalogBytes: prepared.skillsPrompt,
+          availability,
+        };
+        expect(observed.catalogBytes).toBe("");
+        expect(observed.availability).toEqual([]);
+        expect(prepared.skillsSnapshotForRun).toBe(snapshot);
+        expect(prepared.skillsSnapshotForRun?.catalogPrompt).toBeUndefined();
+        if (process.env.ROW_A_RECEIPTS_DIR) {
+          await fs.mkdir(process.env.ROW_A_RECEIPTS_DIR, { recursive: true });
+          await fs.writeFile(
+            path.join(process.env.ROW_A_RECEIPTS_DIR, id + ".json"),
+            JSON.stringify(observed, null, 2),
+          );
+        }
+        if (process.env.ROW_A_BASELINE !== "1" && process.env.ROW_A_BASE_RECEIPTS) {
+          const base = JSON.parse(
+            await fs.readFile(path.join(process.env.ROW_A_BASE_RECEIPTS, id + ".json"), "utf8"),
+          );
+          expect(observed).toEqual(base);
+        }
+      });
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+      clearRuntimeConfigSnapshot();
+      await closeSkillsWatchers();
+    }
+  },
+);
