@@ -1,0 +1,62 @@
+name: Row A snapshot classifier table RED
+on:
+  push:
+    branches: [proof/row-a-classifier-red-20261120]
+defaults:
+  run:
+    shell: bash
+permissions:
+  contents: read
+jobs:
+  table:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Preflight exact copied harness before setup
+        run: |
+          set -euo pipefail
+          test -s scripts/proof/class-table.ts.txt
+          echo '68d86ad63361f7a8658839cc6d47a13559f74620f1cf7dfb74278ab84fee78bc  scripts/proof/class-table.ts.txt' | sha256sum --check
+          cp scripts/proof/class-table.ts.txt "$RUNNER_TEMP/class-table.ts"
+          git fetch --no-tags --depth=1 origin 53633171bf52fddf2abe3c5549b97320febb2677 ae83cf2067e540ae62cd49c83e7d72b3f2248cc8
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Base real-function table capture
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          ROW_A_BASELINE: "1"
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/class-table/base
+        run: |
+          set -euo pipefail
+          git checkout --detach 53633171bf52fddf2abe3c5549b97320febb2677
+          cp "$RUNNER_TEMP/class-table.ts" src/skills/runtime/snapshot-class-table.integration.test.ts
+          mkdir -p "$ROW_A_RECEIPTS_DIR"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
+          node scripts/run-vitest.mjs src/skills/runtime/snapshot-class-table.integration.test.ts --maxWorkers=1 2>&1 | tee "$ROW_A_RECEIPTS_DIR/test.log"
+          rm src/skills/runtime/snapshot-class-table.integration.test.ts
+      - name: Candidate RED table against exact base bytes
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          ROW_A_BASE_RECEIPTS: ${{ runner.temp }}/class-table/base
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/class-table/candidate
+        run: |
+          set -euo pipefail
+          git checkout --detach ae83cf2067e540ae62cd49c83e7d72b3f2248cc8
+          cp "$RUNNER_TEMP/class-table.ts" src/skills/runtime/snapshot-class-table.integration.test.ts
+          mkdir -p "$ROW_A_RECEIPTS_DIR"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
+          node scripts/run-vitest.mjs src/skills/runtime/snapshot-class-table.integration.test.ts --maxWorkers=1 2>&1 | tee "$ROW_A_RECEIPTS_DIR/test.log"
+      - name: Preserve raw table bytes and exits
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: row-a-classifier-table-${{ github.sha }}
+          path: ${{ runner.temp }}/class-table
+          if-no-files-found: error
+          retention-days: 30
