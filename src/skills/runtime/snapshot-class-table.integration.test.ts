@@ -531,7 +531,7 @@ for (const shape of shapes) {
 
 // Fresh base-shaped builder results use the same legacy contract as delivered snapshots.
 it.skipIf(process.platform === "win32")(
-  "class table fresh-build/base-shaped/available",
+  "class table fresh build, response without the pair, expect base bytes and no throw",
   async () => {
     const id = "fresh-build--base-shaped--available";
     const workspace = path.join(invocationRoot, id);
