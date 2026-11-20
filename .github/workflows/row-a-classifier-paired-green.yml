@@ -25,6 +25,8 @@ jobs:
           set -euo pipefail
           cp scripts/proof/remote-prefix-proof.ts.txt "$RUNNER_TEMP/corrected-proof.ts"
           cp src/skills/runtime/legacy-precedence.integration.test.ts "$RUNNER_TEMP/legacy-proof.ts"
+          cp scripts/proof/remote-note-review.ts.txt "$RUNNER_TEMP/remote-note-review.ts"
+          cp scripts/proof/separated-recovery.ts.txt "$RUNNER_TEMP/separated-recovery.ts"
           git fetch --no-tags --depth=1 origin 53633171bf52fddf2abe3c5549b97320febb2677 c1b1aaa1e06198b30836eae8cf5163e04ec3bdbf
       - uses: ./.github/actions/setup-node-env
         with:
@@ -57,6 +59,8 @@ jobs:
         run: |
           set -euo pipefail
           git checkout --detach c1b1aaa1e06198b30836eae8cf5163e04ec3bdbf
+          cp "$RUNNER_TEMP/remote-note-review.ts" src/skills/runtime/remote-note-review.integration.test.ts
+          cp "$RUNNER_TEMP/separated-recovery.ts" src/skills/runtime/separated-recovery.integration.test.ts
           cp "$RUNNER_TEMP/corrected-proof.ts" src/skills/runtime/remote-prefix-proof.integration.test.ts
           mkdir -p "$ROW_A_RECEIPTS_DIR"
           git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
