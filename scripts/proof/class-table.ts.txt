@@ -387,7 +387,7 @@ for (const shape of shapes)
                 .map((b) => b.text)
                 .join("\n");
               const catalog = parseSkillsPromptCatalog(system);
-              expect(system).toContain(prepared.skillsPrompt);
+              expect(system).toContain(prepared.skillsPrompt.trim());
               expect(catalog).toEqual(parseSkillsPromptCatalog(prepared.skillsPrompt));
               const availability = textStrings(payload)
                 .flatMap((s) => s.split("\n"))

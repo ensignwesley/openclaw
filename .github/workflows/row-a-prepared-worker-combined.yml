@@ -26,7 +26,7 @@ jobs:
           cp scripts/proof/class-table.ts.txt "$RUNNER_TEMP/class-table.ts"
           cp scripts/proof/remote-prefix-proof.ts.txt "$RUNNER_TEMP/corrected-proof.ts"
           cp src/skills/runtime/legacy-precedence.integration.test.ts "$RUNNER_TEMP/legacy-proof.ts"
-          git fetch --no-tags --depth=1 origin 53633171bf52fddf2abe3c5549b97320febb2677 55b30a351763fb68bd2b454b796b13ced52a0193
+          git fetch --no-tags --depth=1 origin 53633171bf52fddf2abe3c5549b97320febb2677 efad9840cb0924912a5b8dbc10c1950bd35b1363
       - name: Create invocation-owned table root shared by both captures
         run: |
           set -euo pipefail
@@ -86,7 +86,7 @@ jobs:
           ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-classifier-paired/candidate
         run: |
           set -euo pipefail
-          git checkout --detach 55b30a351763fb68bd2b454b796b13ced52a0193
+          git checkout --detach efad9840cb0924912a5b8dbc10c1950bd35b1363
           cp "$RUNNER_TEMP/corrected-proof.ts" src/skills/runtime/remote-prefix-proof.integration.test.ts
           mkdir -p "$ROW_A_RECEIPTS_DIR"
           git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
