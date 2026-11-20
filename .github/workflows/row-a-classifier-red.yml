@@ -20,7 +20,7 @@ jobs:
         run: |
           set -euo pipefail
           test -s scripts/proof/class-table.ts.txt
-          echo '68d86ad63361f7a8658839cc6d47a13559f74620f1cf7dfb74278ab84fee78bc  scripts/proof/class-table.ts.txt' | sha256sum --check
+          echo '073db02943e2d4cdcfdb1b91366000d3215297691523714d15cc33afc24d3dd0  scripts/proof/class-table.ts.txt' | sha256sum --check
           cp scripts/proof/class-table.ts.txt "$RUNNER_TEMP/class-table.ts"
           git fetch --no-tags --depth=1 origin 53633171bf52fddf2abe3c5549b97320febb2677 ae83cf2067e540ae62cd49c83e7d72b3f2248cc8
       - uses: ./.github/actions/setup-node-env
