@@ -136,23 +136,33 @@ export async function prepareEmbeddedSkills(params: {
       });
       if (params.separateRemoteNote) assertCurrentSkillSnapshotProjection(skillsSnapshot);
     }
+    // The established reader always receives base inputs; only the separated path
+    // may consult live remote eligibility or remove the composed availability note.
+    const basePromptArgs = {
+      assertCurrent: params.assertCurrent,
+      contextTokenBudget: params.attempt.contextTokenBudget,
+      skillsSnapshot,
+      entries: promptSkillEntries,
+      loadEntries: async () => mapEntries(await loadSkillEntries()) ?? [],
+      config: params.attempt.config,
+      workspaceDir: skillsPromptWorkspaceDir,
+      agentId: params.sessionAgentId,
+      eligibility: skillsEligibility,
+      preserveEntryOrder,
+    };
     const [skillsPrompt, libraryEntries] = await settleCurrentReadPreparations([
-      resolveSkillsPrompt({
-        separateRemoteNote: params.separateRemoteNote && !legacySkillsPromptFallback,
-        onLegacyPromptFallback: () => {
-          legacySkillsPromptFallback = true;
-        },
-        assertCurrent: params.assertCurrent,
-        contextTokenBudget: params.attempt.contextTokenBudget,
-        skillsSnapshot,
-        entries: promptSkillEntries,
-        loadEntries: async () => mapEntries(await loadSkillEntries()) ?? [],
-        config: params.attempt.config,
-        workspaceDir: skillsPromptWorkspaceDir,
-        agentId: params.sessionAgentId,
-        eligibility: runEligibility,
-        preserveEntryOrder,
-      }),
+      resolveSkillsPrompt(
+        params.separateRemoteNote && !legacySkillsPromptFallback
+          ? {
+              ...basePromptArgs,
+              eligibility: runEligibility,
+              separateRemoteNote: true,
+              onLegacyPromptFallback: () => {
+                legacySkillsPromptFallback = true;
+              },
+            }
+          : basePromptArgs,
+      ),
       params.sandbox?.enabled
         ? []
         : prepareSkillLibrarySelection(

@@ -8,6 +8,7 @@ import {
 import { prepareEmbeddedAttemptPromptContext } from "../../agents/embedded-agent-runner/run/attempt-prompt-build.js";
 import { buildAttemptSystemPrompt } from "../../agents/embedded-agent-runner/run/attempt-system-prompt.js";
 import { prepareEmbeddedSkills } from "../../agents/embedded-agent-runner/skill-runtime.js";
+import { prepareRuntimeSkillEntries } from "../../agents/embedded-agent-runner/skills-prompt.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { createReadTool } from "../../agents/sessions/tools/read.js";
 import { createAgentToolsSandboxContext } from "../../agents/test-helpers/agent-tools-sandbox-context.js";
@@ -22,11 +23,15 @@ import { prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot, resolveSkillsPrompt } from "../loading/workspace-skill-prompt.js";
 import type { SkillSnapshot } from "../types.js";
 import { closeSkillsWatchers } from "./refresh.js";
+import { recordRemoteNodeInfo, removeRemoteNodeInfo, setSkillsRemoteRegistry } from "./remote.js";
+import { testRemoteSession, setTestSkillsRemoteRegistry } from "./remote.test-helpers.js";
 
 registerParityHostLifecycle();
 type Kind =
   | "empty-positive"
   | "empty-absent"
+  | "empty-pair"
+  | "live-security"
   | "old-degraded"
   | "keyed-degraded"
   | "legacy-identity"
@@ -41,6 +46,7 @@ function textStrings(value: unknown): string[] {
 }
 async function runCase(kind: Kind, owner: "embedded" | "reader") {
   const empty = kind.startsWith("empty-");
+  const nodeId = "legacy-late-mac";
   try {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", path.join(state.root, "empty-skills"));
@@ -75,7 +81,7 @@ async function runCase(kind: Kind, owner: "embedded" | "reader") {
           skills: [],
           promptFormatVersion: 8,
           nodeSkillsEligibility: { canExec: true },
-          ...(kind === "empty-positive"
+          ...(kind === "empty-positive" || kind === "empty-pair"
             ? {
                 remoteNote:
                   "Remote macOS node available (Synthetic admitted Mac). Run macOS-only skills via exec host=node on that node.",
@@ -84,7 +90,7 @@ async function runCase(kind: Kind, owner: "embedded" | "reader") {
         };
       else {
         snapshot = await buildSkillSnapshot(captured, { config });
-        snapshot.promptFormatVersion = kind === "old-degraded" ? 7 : 8;
+        snapshot.promptFormatVersion = kind === "old-degraded" || kind === "live-security" ? 7 : 8;
         delete snapshot.catalogPrompt;
         if (kind === "keyed-degraded") delete snapshot.resolvedSkills;
         if (kind === "legacy-identity")
@@ -112,6 +118,27 @@ async function runCase(kind: Kind, owner: "embedded" | "reader") {
           },
         ]);
       }
+      if (kind === "empty-pair") snapshot.catalogPrompt = "";
+      if (kind === "live-security") {
+        // Capture before the remote connects; force the base unsupported-format security rebuild.
+        snapshot.nodeSkillsEligibility = { canExec: true };
+        const dir = path.join(workspace, "skills", "remote-only");
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(
+          path.join(dir, "SKILL.md"),
+          '---\nname: remote-only\ndescription: Only on the late Mac\nmetadata: {"openclaw":{"os":["darwin"]}}\n---\nRemote instructions.\n',
+        );
+      }
+      if (kind === "live-security" || kind === "empty-pair") {
+        const connected = testRemoteSession(nodeId, {
+          connId: "late-c1",
+          displayName: "Late connected Mac",
+          platform: "darwin",
+          commands: ["system.run"],
+        });
+        setTestSkillsRemoteRegistry(nodeId, { get: () => connected });
+        recordRemoteNodeInfo(connected);
+      }
       const sandbox = empty
         ? createAgentToolsSandboxContext({
             workspaceDir: workspace,
@@ -137,8 +164,34 @@ async function runCase(kind: Kind, owner: "embedded" | "reader") {
       let legacyPrompt: string;
       let prepared;
       if (owner === "embedded") {
-        legacyPrompt = (await prepareEmbeddedSkills({ ...params, separateRemoteNote: false }))
-          .skillsPrompt;
+        if (kind === "live-security") {
+          const inputs = await prepareRuntimeSkillEntries({
+            skillsAnchorWorkspace: workspace,
+            executionWorkspaceDir: workspace,
+            skillsSnapshot: snapshot,
+            config,
+            agentId: "main",
+          });
+          // Exact base reader inputs, not head's separateRemoteNote=false call (which shares the bug).
+          legacyPrompt = await resolveSkillsPrompt({
+            skillsSnapshot: inputs.skillsSnapshot,
+            entries: inputs.mapEntries(
+              inputs.shouldLoadSkillEntries ? inputs.skillEntries : undefined,
+            ),
+            loadEntries: async () => inputs.mapEntries(await inputs.loadSkillEntries()) ?? [],
+            config,
+            workspaceDir: inputs.skillsPromptWorkspaceDir,
+            agentId: "main",
+            eligibility: inputs.skillsEligibility,
+            preserveEntryOrder: inputs.preserveEntryOrder,
+          });
+          expect(legacyPrompt).not.toContain("Remote macOS node available");
+          expect(legacyPrompt).not.toContain("<name>remote-only</name>");
+          expect(legacyPrompt).toContain("<name>healthy</name>");
+        } else {
+          legacyPrompt = (await prepareEmbeddedSkills({ ...params, separateRemoteNote: false }))
+            .skillsPrompt;
+        }
         prepared = await prepareEmbeddedSkills({ ...params, separateRemoteNote: true });
       } else {
         const readerParams = {
@@ -229,7 +282,13 @@ async function runCase(kind: Kind, owner: "embedded" | "reader") {
           );
       }
       expect.soft(prepared.skillsPrompt).toBe(legacyPrompt);
+      if (kind === "live-security") {
+        expect.soft(system).not.toContain("Late connected Mac");
+        expect.soft(catalog.some((skill) => skill.name === "remote-only")).toBe(false);
+        expect.soft(availability).toEqual([]);
+      }
       if (empty) {
+        expect.soft(prepared.skillsPrompt).toBe("");
         expect.soft(catalog).toEqual([]);
         expect(availability).toEqual([]);
       } else {
@@ -243,6 +302,8 @@ async function runCase(kind: Kind, owner: "embedded" | "reader") {
       }
     });
   } finally {
+    removeRemoteNodeInfo(nodeId);
+    setSkillsRemoteRegistry(null);
     setActiveDegradedSecretOwners([]);
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -255,6 +316,8 @@ for (const owner of ["embedded", "reader"] as const) {
   for (const kind of [
     "empty-positive",
     "empty-absent",
+    "empty-pair",
+    ...(owner === "embedded" ? ["live-security" as const] : []),
     "old-degraded",
     "keyed-degraded",
     "legacy-identity",

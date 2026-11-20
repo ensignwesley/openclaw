@@ -113,6 +113,7 @@ function hasUnavailableSnapshotSkillOwners(snapshot: SkillSnapshot): boolean {
 
 /** Legacy snapshots and degraded-owner decisions retain the established reader. */
 export function shouldPreserveLegacySkillSnapshotPrompt(snapshot: SkillSnapshot): boolean {
+  // Empty prompts keep base silence: separating would add a turn availability fact.
   return (
     !snapshot.prompt.trim() ||
     hasUnavailableSnapshotSkillOwners(snapshot) ||

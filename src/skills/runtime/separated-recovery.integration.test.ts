@@ -60,17 +60,11 @@ async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallba
       );
       const workspace = kind === "v8-roots" ? empty : source;
       if (kind === "v8-roots") {
-        const added = path.join(
-          workspace,
-          "skills",
-          kind === "loader" ? "new-outsider" : "selected",
-        );
+        const added = path.join(workspace, "skills", "selected");
         await fs.mkdir(added, { recursive: true });
         await fs.writeFile(
           path.join(added, "SKILL.md"),
-          "---\nname: " +
-            (kind === "loader" ? "new-outsider" : "selected") +
-            "\ndescription: Wrong current root\n---\nNot captured.\n",
+          "---\nname: " + "selected" + "\ndescription: Wrong current root\n---\nNot captured.\n",
         );
       }
       const config = { plugins: { enabled: false }, agents: { defaults: { workspace } } };
