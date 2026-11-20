@@ -233,7 +233,13 @@ async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallba
       expect.soft(catalog).toEqual([{ name: "selected", location: expectedLocation }]);
       if (["resolved", "loader", "v8-roots", "fallback", "reader-fallback"].includes(kind)) {
         expect.soft(prepared.skillsPrompt).toBe(legacyPrompt);
-        expect.soft(prepared.skillsSnapshotForRun).toBe(snapshot);
+        if (kind === "loader") {
+          // A stale catalogPrompt is dropped to preserve the legacy shape.
+          const { catalogPrompt: _catalogPrompt, ...legacySnapshot } = snapshot;
+          expect.soft(prepared.skillsSnapshotForRun).toStrictEqual(legacySnapshot);
+        } else {
+          expect.soft(prepared.skillsSnapshotForRun).toBe(snapshot);
+        }
         expect.soft(prepared.skillsSnapshotForRun?.skillOverrides).toEqual({ selected: true });
         expect.soft(prepared.legacySkillsPromptFallback).toBe(true);
         expect.soft(diagnostics.warn).not.toHaveBeenCalled();

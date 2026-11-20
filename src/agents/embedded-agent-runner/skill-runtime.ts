@@ -124,8 +124,10 @@ export async function prepareEmbeddedSkills(params: {
     const inputClass = classifySkillSnapshot(skillsSnapshot);
     let legacySkillsPromptFallback = Boolean(params.separateRemoteNote && inputClass === "legacy");
     if (inputClass === "legacy") {
-      const { catalogPrompt: _catalogPrompt, ...legacySnapshot } = skillsSnapshot;
-      skillsSnapshot = legacySnapshot;
+      if (Object.hasOwn(skillsSnapshot, "catalogPrompt")) {
+        const { catalogPrompt: _catalogPrompt, ...legacySnapshot } = skillsSnapshot;
+        skillsSnapshot = legacySnapshot;
+      }
       if (params.separateRemoteNote)
         skillsLogger.debug("Using established skills prompt for a legacy snapshot.");
     }
