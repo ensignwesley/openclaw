@@ -168,7 +168,7 @@ for (const shape of shapes) for (const route of paths) for (const owners of owne
             expect.soft(prepared.skillsSnapshotForRun?.catalogPrompt).toBeUndefined();
           } else {
             // Feature-only difference: stable delivered catalog in system; one live fact in turn context.
-            const expectedCatalog=formatSkillsForPromptBounded({skills:prepared.skillsSnapshotForRun!.resolvedSkills!,preserveOrder:true});
+            const expectedCatalog=await resolveSkillsPrompt({workspaceDir:workspace,config,skillsSnapshot:{...prepared.skillsSnapshotForRun!,prompt:formatSkillsForPromptBounded({skills:prepared.skillsSnapshotForRun!.resolvedSkills!,preserveOrder:true}),catalogPrompt:undefined}});
             expect.soft(observed.catalogBytes).toBe(expectedCatalog);
             expect.soft(observed.availability).toEqual([shape === "pair-no-note" ? "Remote macOS execution is unavailable for this turn." : note]);
           }
