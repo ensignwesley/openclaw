@@ -1,0 +1,331 @@
+import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { expect, it, vi } from "vitest";
+import {
+  captureAnthropicExchange,
+  registerParityHostLifecycle,
+} from "../../../packages/ai/src/provider-transport-parity.test-support.js";
+import { prepareEmbeddedAttemptPromptContext } from "../../agents/embedded-agent-runner/run/attempt-prompt-build.js";
+import { buildAttemptSystemPrompt } from "../../agents/embedded-agent-runner/run/attempt-system-prompt.js";
+import { prepareEmbeddedSkills } from "../../agents/embedded-agent-runner/skill-runtime.js";
+import { convertToLlm } from "../../agents/sessions/messages.js";
+import { createReadTool } from "../../agents/sessions/tools/read.js";
+import { createAgentToolsSandboxContext } from "../../agents/test-helpers/agent-tools-sandbox-context.js";
+import {
+  setRuntimeConfigSnapshot,
+  clearRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { transferSkillResources } from "../../gateway/worker-environments/skill-resource-transfer.js";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { parseSkillsPromptCatalog } from "../loading/skill-prompt-catalog.js";
+import { formatSkillsForPromptBounded } from "../loading/skill-prompt-limits.js";
+import { buildSkillSnapshot, resolveSkillsPrompt } from "../loading/workspace-skill-prompt.js";
+import { closeSkillsWatchers } from "./refresh.js";
+import { recordRemoteNodeInfo, removeRemoteNodeInfo, setSkillsRemoteRegistry } from "./remote.js";
+import { testRemoteSession, setTestSkillsRemoteRegistry } from "./remote.test-helpers.js";
+
+vi.mock("node:crypto", async (load) => ({
+  ...(await load<typeof import("node:crypto")>()),
+  randomUUID: () => "22222222-2222-4222-8222-222222222222",
+}));
+registerParityHostLifecycle();
+function textStrings(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(textStrings);
+  if (value && typeof value === "object") return Object.values(value).flatMap(textStrings);
+  return [];
+}
+const shapes = ["no-pair", "both-empty", "pair-note", "pair-no-note"] as const;
+const paths = ["none", "sandbox", "worker"] as const;
+const ownerStates = ["available", "unavailable"] as const;
+const note =
+  "Remote macOS node available (Matrix Mac). Run macOS-only skills via exec host=node on that node.";
+for (const shape of shapes)
+  for (const route of paths)
+    for (const owners of ownerStates) {
+      it.skipIf(process.platform === "win32")(
+        `class table ${shape}/${route}/${owners}`,
+        async () => {
+          const id = `${shape}--${route}--${owners}`;
+          const root = "/tmp/row-a-snapshot-class-table";
+          let resources: Awaited<ReturnType<typeof transferSkillResources>>;
+          try {
+            await withOpenClawTestState({ scenario: "minimal" }, async () => {
+              await fs.rm(root, { recursive: true, force: true });
+              const workspace = path.join(root, "host");
+              const remote = path.join(root, "worker");
+              const materialized = path.join(root, "materialized");
+              await fs.mkdir(remote, { recursive: true });
+              vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", path.join(root, "empty-skills"));
+              vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(root, "empty-plugins"));
+              for (const name of ["cold", "healthy"]) {
+                const file = path.join(workspace, "skills", name, "SKILL.md");
+                await fs.mkdir(path.dirname(file), { recursive: true });
+                await fs.writeFile(
+                  file,
+                  `---\nname: ${name}\ndescription: Matrix ${name} instructions\n---\nInstructions.\n`,
+                );
+              }
+              const config = { plugins: { enabled: false }, agents: { defaults: { workspace } } };
+              setRuntimeConfigSnapshot(config);
+              const snapshot = await buildSkillSnapshot(workspace, { config });
+              const skills = snapshot.resolvedSkills!;
+              const plain = formatSkillsForPromptBounded({ skills, preserveOrder: true });
+              snapshot.prompt = shape === "pair-no-note" ? plain : `${note}\n${plain}`;
+              snapshot.promptFormatVersion = 8;
+              snapshot.nodeSkillsEligibility = { canExec: true };
+              snapshot.remoteNote = shape === "pair-no-note" ? undefined : note;
+              if (shape === "no-pair") delete snapshot.catalogPrompt;
+              else snapshot.catalogPrompt = plain;
+              if (shape === "both-empty") {
+                snapshot.prompt = "";
+                snapshot.catalogPrompt = "";
+              }
+              // Force the real materialized owner even for both-empty input; do not use its empty fast path.
+              if (route === "sandbox")
+                snapshot.librarySelections = [
+                  {
+                    skillId: "11111111-1111-4111-8111-111111111111",
+                    revision: "a".repeat(64),
+                    name: "healthy",
+                    ownerProfileId: null,
+                  },
+                ];
+              const connected = testRemoteSession("matrix-mac", {
+                displayName: "Matrix Mac",
+                platform: "darwin",
+                commands: ["system.run"],
+              });
+              setTestSkillsRemoteRegistry(connected.nodeId, { get: () => connected });
+              recordRemoteNodeInfo(connected);
+              if (owners === "unavailable")
+                setActiveDegradedSecretOwners([
+                  {
+                    ownerKind: "capability",
+                    ownerId: "skill:cold",
+                    state: "unavailable",
+                    paths: ["skills.entries.cold.apiKey"],
+                    refKeys: ["env:default:SYNTHETIC"],
+                    reason: "Synthetic unavailable owner",
+                  },
+                ]);
+              let input = snapshot;
+              let sandbox;
+              if (route === "sandbox") {
+                sandbox = createAgentToolsSandboxContext({
+                  workspaceDir: materialized,
+                  agentWorkspaceDir: workspace,
+                  skillsWorkspaceDir: materialized,
+                  containerWorkdir: "/workspace",
+                });
+                sandbox.skillUsagePaths = [];
+                for (const skill of skills) {
+                  const target = path.join(materialized, "skills", skill.name, "SKILL.md");
+                  await fs.mkdir(path.dirname(target), { recursive: true });
+                  await fs.copyFile(skill.filePath, target);
+                  sandbox.skillUsagePaths.push({
+                    skillName: skill.name,
+                    skillFile: skill.filePath,
+                    readPath: target,
+                    skillSource: "workspace",
+                  });
+                }
+              }
+              if (route === "worker") {
+                resources = await transferSkillResources({
+                  snapshot,
+                  workspaceDir: workspace,
+                  remoteWorkspaceDir: remote,
+                  assertCurrent: () => {},
+                  tunnel: {
+                    runWorkspaceCommand: async (command) =>
+                      new Promise((resolve, reject) => {
+                        const child = spawn(command.argv[0]!, command.argv.slice(1), {
+                          stdio: "pipe",
+                        });
+                        let stdout = "",
+                          stderr = "";
+                        child.stdout.on("data", (b) => (stdout += b));
+                        child.stderr.on("data", (b) => (stderr += b));
+                        child.on("error", reject);
+                        child.on("close", (code) =>
+                          resolve({
+                            stdout,
+                            stderr,
+                            code,
+                            termination: "exit",
+                            signal: null,
+                            killed: false,
+                          }),
+                        );
+                        child.stdin.end(command.input);
+                      }),
+                  },
+                });
+                expect(resources).toBeDefined();
+                input = resources!.snapshot;
+              }
+              // Library selection has already been delivered in remap paths. No host library lookup.
+              if (route !== "sandbox") delete input.librarySelections;
+              const attempt = {
+                config,
+                skillsSnapshot: input,
+                sessionId: "matrix",
+                sessionKey: "agent:main:matrix",
+              };
+              const prepared = await prepareEmbeddedSkills({
+                separateRemoteNote: true,
+                applySkillEnvironment: false,
+                includeCodeModeSkills: false,
+                attempt,
+                effectiveWorkspace: workspace,
+                sandbox,
+                sessionAgentId: "main",
+              });
+              const rendered = await buildAttemptSystemPrompt({
+                isRawModelRun: false,
+                transformSystemPrompt: (s) => s,
+                embeddedSystemPrompt: {
+                  config,
+                  workspaceDir: workspace,
+                  skillsPrompt: prepared.skillsPrompt,
+                  toolNames: ["read"],
+                  runtimeInfo: {
+                    agentId: "main",
+                    host: "synthetic-legacy",
+                    model: "fixture/model",
+                  },
+                },
+              });
+              const context = await prepareEmbeddedAttemptPromptContext({
+                attempt,
+                preparedSkills: prepared,
+                capabilityToolNames: new Set(["read", "computer"]),
+                includeBoundaryTimestamp: false,
+                isRawModelRun: false,
+                messages: [],
+                prompt: {
+                  effectivePrompt: "Use only admitted skills.",
+                  effectiveTranscriptPrompt: "Use only admitted skills.",
+                },
+                replaceSessionMessages: () => {},
+                sessionAgentId: "main",
+                systemPromptText: rendered.systemPrompt,
+                toolResultPromptProjectionState: {
+                  replacements: new Map(),
+                  frozen: new Set(),
+                  ambiguousBaseKeys: new Set(),
+                  restoredCacheTtl: new Map(),
+                  sourceHashByKey: new Map(),
+                },
+              });
+              const read = createReadTool(workspace);
+              const exchange = await captureAnthropicExchange("transport", {
+                context: {
+                  systemPrompt: rendered.systemPrompt,
+                  messages: convertToLlm(context.hookMessagesForCurrentPrompt),
+                  tools: [
+                    { name: read.name, description: read.description, parameters: read.parameters },
+                  ],
+                },
+              });
+              expect(exchange.requests).toHaveLength(1);
+              expect(exchange.terminal.stopReason).not.toBe("error");
+              const payload = exchange.requests[0]!.payload;
+              const system = (payload.system as Array<{ text: string }>)
+                .map((b) => b.text)
+                .join("\n");
+              const catalog = parseSkillsPromptCatalog(system);
+              expect(system).toContain(prepared.skillsPrompt);
+              expect(catalog).toEqual(parseSkillsPromptCatalog(prepared.skillsPrompt));
+              const availability = textStrings(payload)
+                .flatMap((s) => s.split("\n"))
+                .filter((s) => s.startsWith("Remote macOS "));
+
+              const observed = { catalogBytes: prepared.skillsPrompt, availability };
+              const output = process.env.ROW_A_RECEIPTS_DIR;
+              if (output) {
+                await fs.mkdir(output, { recursive: true });
+                await fs.writeFile(
+                  path.join(output, id + ".json"),
+                  JSON.stringify(
+                    {
+                      id,
+                      shape,
+                      route,
+                      owners,
+                      inputClass:
+                        shape === "no-pair" || shape === "both-empty" || owners === "unavailable"
+                          ? "legacy"
+                          : "separated",
+                      ...observed,
+                      runCatalogPrompt: prepared.skillsSnapshotForRun?.catalogPrompt,
+                      runPrompt: prepared.skillsSnapshotForRun?.prompt,
+                    },
+                    null,
+                    2,
+                  ),
+                );
+              }
+              if (process.env.ROW_A_BASELINE !== "1") {
+                const base = process.env.ROW_A_BASE_RECEIPTS
+                  ? JSON.parse(
+                      await fs.readFile(
+                        path.join(process.env.ROW_A_BASE_RECEIPTS, id + ".json"),
+                        "utf8",
+                      ),
+                    )
+                  : JSON.parse(
+                      await fs.readFile(
+                        new URL("./fixtures/snapshot-class-table-base.json", import.meta.url),
+                        "utf8",
+                      ),
+                    )[id];
+                const legacy =
+                  shape === "no-pair" || shape === "both-empty" || owners === "unavailable";
+                if (legacy) {
+                  expect.soft(observed.catalogBytes).toBe(base.catalogBytes);
+                  expect.soft(observed.availability).toEqual(base.availability);
+                  expect.soft(prepared.skillsSnapshotForRun?.catalogPrompt).toBeUndefined();
+                } else {
+                  // Feature-only difference: stable delivered catalog in system; one live fact in turn context.
+                  const expectedCatalog = await resolveSkillsPrompt({
+                    workspaceDir: workspace,
+                    config,
+                    skillsSnapshot: {
+                      ...prepared.skillsSnapshotForRun!,
+                      prompt: formatSkillsForPromptBounded({
+                        skills: prepared.skillsSnapshotForRun!.resolvedSkills!,
+                        preserveOrder: true,
+                      }),
+                      catalogPrompt: undefined,
+                    },
+                  });
+                  expect.soft(observed.catalogBytes).toBe(expectedCatalog);
+                  expect
+                    .soft(observed.availability)
+                    .toEqual([
+                      shape === "pair-no-note"
+                        ? "Remote macOS execution is unavailable for this turn."
+                        : note,
+                    ]);
+                }
+              }
+            });
+          } finally {
+            await resources?.cleanup();
+            await fs.rm(root, { recursive: true, force: true });
+            removeRemoteNodeInfo("matrix-mac");
+            setSkillsRemoteRegistry(null);
+            setActiveDegradedSecretOwners([]);
+            vi.restoreAllMocks();
+            vi.unstubAllGlobals();
+            vi.unstubAllEnvs();
+            clearRuntimeConfigSnapshot();
+            await closeSkillsWatchers();
+          }
+        },
+      );
+    }
