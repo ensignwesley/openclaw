@@ -20,6 +20,7 @@ import { parseSkillsPromptCatalog } from "../loading/skill-prompt-catalog.js";
 import * as projectionOwner from "../loading/skill-snapshot-reprojection.js";
 import * as skillLoader from "../loading/workspace-skill-loader.js";
 import * as promptOwner from "../loading/workspace-skill-prompt.js";
+import type { SkillSnapshot } from "../types.js";
 import * as refreshOwner from "./refresh.js";
 
 // Mock isolation: preserve the real logger factory and all other exports; observe only skills warnings.
@@ -64,7 +65,7 @@ async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallba
         await fs.mkdir(added, { recursive: true });
         await fs.writeFile(
           path.join(added, "SKILL.md"),
-          "---\nname: " + "selected" + "\ndescription: Wrong current root\n---\nNot captured.\n",
+          "---\nname: selected\ndescription: Wrong current root\n---\nNot captured.\n",
         );
       }
       const config = { plugins: { enabled: false }, agents: { defaults: { workspace } } };
@@ -81,9 +82,14 @@ async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallba
         );
       }
       snapshot.promptFormatVersion = 8;
-      if (kind === "loader") snapshot.catalogPrompt = "STALE DERIVED CATALOG";
-      else delete snapshot.catalogPrompt;
-      if (kind !== "resolved" && kind !== "fallback") delete snapshot.resolvedSkills;
+      if (kind === "loader") {
+        snapshot.catalogPrompt = "STALE DERIVED CATALOG";
+      } else {
+        delete snapshot.catalogPrompt;
+      }
+      if (kind !== "resolved" && kind !== "fallback") {
+        delete snapshot.resolvedSkills;
+      }
       snapshot.skillOverrides = { selected: true };
       if (kind === "v8-roots") {
         snapshot.skillRoots = {
@@ -123,7 +129,11 @@ async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallba
       };
       const loaderSpy =
         kind === "resolved" ? vi.spyOn(skillLoader, "prepareWorkspaceSkills") : undefined;
-      let prepared;
+      let prepared: {
+        skillsPrompt: string;
+        skillsSnapshotForRun: SkillSnapshot | undefined;
+        legacySkillsPromptFallback: boolean;
+      };
       let fallbackNotifications = 0;
       const readerLoader = vi.fn(async () => {
         throw new Error("Synthetic discovery unavailable");
@@ -229,7 +239,9 @@ async function runCase(kind: "resolved" | "loader" | "fallback" | "reader-fallba
           ),
         );
       }
-      if (kind === "resolved") expect.soft(loaderSpy).not.toHaveBeenCalled();
+      if (kind === "resolved") {
+        expect.soft(loaderSpy).not.toHaveBeenCalled();
+      }
       expect.soft(catalog).toEqual([{ name: "selected", location: expectedLocation }]);
       if (["resolved", "loader", "v8-roots", "fallback", "reader-fallback"].includes(kind)) {
         expect.soft(prepared.skillsPrompt).toBe(legacyPrompt);

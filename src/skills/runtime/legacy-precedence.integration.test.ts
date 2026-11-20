@@ -39,9 +39,15 @@ type Kind =
   | "malformed-body"
   | "malformed-tail";
 function textStrings(value: unknown): string[] {
-  if (typeof value === "string") return [value];
-  if (Array.isArray(value)) return value.flatMap(textStrings);
-  if (value && typeof value === "object") return Object.values(value).flatMap(textStrings);
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap(textStrings);
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value).flatMap(textStrings);
+  }
   return [];
 }
 async function runCase(kind: Kind, owner: "embedded" | "reader") {
@@ -75,7 +81,7 @@ async function runCase(kind: Kind, owner: "embedded" | "reader") {
       const config = { plugins: { enabled: false }, agents: { defaults: { workspace } } };
       setRuntimeConfigSnapshot(config);
       let snapshot: SkillSnapshot;
-      if (empty)
+      if (empty) {
         snapshot = {
           prompt: kind === "empty-absent" ? "  \n" : "",
           skills: [],
@@ -88,25 +94,31 @@ async function runCase(kind: Kind, owner: "embedded" | "reader") {
               }
             : {}),
         };
-      else {
+      } else {
         snapshot = await buildSkillSnapshot(captured, { config });
         snapshot.promptFormatVersion = kind === "old-degraded" || kind === "live-security" ? 7 : 8;
         delete snapshot.catalogPrompt;
-        if (kind === "keyed-degraded") delete snapshot.resolvedSkills;
-        if (kind === "legacy-identity")
+        if (kind === "keyed-degraded") {
+          delete snapshot.resolvedSkills;
+        }
+        if (kind === "legacy-identity") {
           snapshot.skills = snapshot.skills.map(({ name }) => ({ name }));
-        if (kind === "malformed-boundary")
+        }
+        if (kind === "malformed-boundary") {
           snapshot.prompt += "\n<available_skills></available_skills>";
-        if (kind === "malformed-body")
+        }
+        if (kind === "malformed-body") {
           snapshot.prompt = snapshot.prompt.replace(
             "<available_skills>",
             "<available_skills>UNEXPECTED BODY",
           );
-        if (kind === "malformed-tail")
+        }
+        if (kind === "malformed-tail") {
           snapshot.prompt = snapshot.prompt.replace(
             "</available_skills>",
             "UNEXPECTED TAIL</available_skills>",
           );
+        }
         setActiveDegradedSecretOwners([
           {
             ownerKind: "capability",
@@ -118,7 +130,9 @@ async function runCase(kind: Kind, owner: "embedded" | "reader") {
           },
         ]);
       }
-      if (kind === "empty-pair") snapshot.catalogPrompt = "";
+      if (kind === "empty-pair") {
+        snapshot.catalogPrompt = "";
+      }
       if (kind === "live-security") {
         // Capture before the remote connects; force the base unsupported-format security rebuild.
         snapshot.nodeSkillsEligibility = { canExec: true };
@@ -162,7 +176,11 @@ async function runCase(kind: Kind, owner: "embedded" | "reader") {
         sessionAgentId: "main",
       };
       let legacyPrompt: string;
-      let prepared;
+      let prepared: {
+        skillsPrompt: string;
+        skillsSnapshotForRun: SkillSnapshot | undefined;
+        legacySkillsPromptFallback: boolean;
+      };
       if (owner === "embedded") {
         if (kind === "live-security") {
           const inputs = await prepareRuntimeSkillEntries({
@@ -275,11 +293,12 @@ async function runCase(kind: Kind, owner: "embedded" | "reader") {
             2,
           ),
         );
-        if (empty && owner === "embedded")
+        if (empty && owner === "embedded") {
           await fs.writeFile(
             path.join(receipts, kind + ".availability.json"),
             JSON.stringify(availability),
           );
+        }
       }
       expect.soft(prepared.skillsPrompt).toBe(legacyPrompt);
       if (kind === "live-security") {

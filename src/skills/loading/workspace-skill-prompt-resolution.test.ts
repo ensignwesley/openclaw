@@ -101,7 +101,9 @@ describe("resolveSkillsPrompt", () => {
         resolveCodeModeSkills({ skillsPrompt: catalog, candidates: snapshot.resolvedSkills! }),
       ).toEqual(legacy);
       expect(snapshot.catalogPrompt?.trim()).toBe(catalog);
-      if (maxChars > 80) expect(legacy.length).toBeGreaterThan(0);
+      if (maxChars > 80) {
+        expect(legacy.length).toBeGreaterThan(0);
+      }
     },
   );
 
@@ -321,13 +323,15 @@ for (const state of [
       ];
       const snapshot = await snapshotOf(entries);
       const projection = await import("./skill-prompt-limits.js");
+      const { prompt, catalogPrompt } = projection.prepareSkillsForPrompt({
+        skills: snapshot.resolvedSkills!,
+        remoteNote: note,
+        ...options,
+      });
       const projected = {
         ...snapshot,
-        ...projection.prepareSkillsForPrompt({
-          skills: snapshot.resolvedSkills!,
-          remoteNote: note,
-          ...options,
-        }),
+        prompt,
+        catalogPrompt,
         remoteNote: note,
       };
       expect(() => reprojection.assertCurrentSkillSnapshotProjection(projected)).not.toThrow();

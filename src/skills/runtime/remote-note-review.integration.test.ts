@@ -94,7 +94,9 @@ async function prepareCase(legacy: boolean, capabilities: string[], codeModeActi
         expect(prepared.skillsPrompt).toBe(snapshot.prompt.trim());
         expect(prepared.skillsSnapshotForRun).toBe(snapshot);
         expect(prepared.legacySkillsPromptFallback).toBe(true);
-      } else expect(prepared.skillsPrompt).not.toContain("Remote macOS node available");
+      } else {
+        expect(prepared.skillsPrompt).not.toContain("Remote macOS node available");
+      }
       const systemPrompt = buildAgentSystemPrompt({
         workspaceDir: workspace,
         skillsPrompt: prepared.skillsPrompt,
@@ -102,7 +104,9 @@ async function prepareCase(legacy: boolean, capabilities: string[], codeModeActi
         toolNames: capabilities,
         runtimeInfo: { agentId: "main", host: "fixed", model: "fixture/model" },
       });
-      if (!codeModeActive) expect(systemPrompt).toContain("<name>fixed</name>");
+      if (!codeModeActive) {
+        expect(systemPrompt).toContain("<name>fixed</name>");
+      }
       const context = await prepareEmbeddedAttemptPromptContext({
         attempt,
         preparedSkills: prepared,
@@ -143,22 +147,24 @@ async function prepareCase(legacy: boolean, capabilities: string[], codeModeActi
 
 it("retains composed legacy availability without rebuilding a persisted v8 catalog", async () => {
   const result = await prepareCase(true, ["read", "computer"]);
-  if (process.env.ROW_A_RECEIPTS_DIR)
+  if (process.env.ROW_A_RECEIPTS_DIR) {
     await fs.writeFile(
       path.join(process.env.ROW_A_RECEIPTS_DIR, "legacy-case.json"),
       JSON.stringify(result, null, 2),
     );
+  }
   expect(result.systemPrompt + result.turn).toContain("Remote macOS node available");
   expect(result.turn).not.toContain("Remote macOS execution is unavailable");
 });
 
 it("retains connected Mac availability with installed skill access but no read tool", async () => {
   const result = await prepareCase(false, ["skills_read", "skills_search", "computer"]);
-  if (process.env.ROW_A_RECEIPTS_DIR)
+  if (process.env.ROW_A_RECEIPTS_DIR) {
     await fs.writeFile(
       path.join(process.env.ROW_A_RECEIPTS_DIR, "installed-reader-case.json"),
       JSON.stringify(result, null, 2),
     );
+  }
   expect(result.turn).toContain("Remote macOS node available");
 });
 

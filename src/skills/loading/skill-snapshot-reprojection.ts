@@ -50,9 +50,13 @@ export function reprojectSkillSnapshot(
 
 /** Pair consistency is not proof that the strings describe the admitted delivery. */
 function hasCurrentSkillSnapshotProjection(snapshot: SkillSnapshot): boolean {
-  if (typeof snapshot.catalogPrompt !== "string") return false;
+  if (typeof snapshot.catalogPrompt !== "string") {
+    return false;
+  }
   const catalog = snapshot.catalogPrompt;
-  if (snapshot.prompt === catalog) return true;
+  if (snapshot.prompt === catalog) {
+    return true;
+  }
   const note = snapshot.remoteNote;
   return Boolean(note && snapshot.prompt === (catalog ? `${note}\n${catalog}` : note));
 }

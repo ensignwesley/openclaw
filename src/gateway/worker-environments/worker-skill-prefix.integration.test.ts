@@ -49,9 +49,9 @@ it("renders the transferred catalog through the real remote-exec caller and embe
     const input = fx.turn("run-projection-transfer");
     input.model = "gpt-6.1-sol";
     Object.assign(input.config, { plugins: { enabled: false } });
-    input.config.agents.defaults.models = {
-      "openai/gpt-6.1-sol": { agentRuntime: { id: "openclaw" } },
-    };
+    Object.assign(input.config.agents.defaults, {
+      models: { "openai/gpt-6.1-sol": { agentRuntime: { id: "openclaw" } } },
+    });
     const snapshot = await buildSkillSnapshot(host, {
       config: input.config,
       entries: loadWorkspaceSkills(host, { workspaceOnly: true, config: input.config }),
@@ -92,7 +92,9 @@ it("renders the transferred catalog through the real remote-exec caller and embe
       { ...input, skillsSnapshot: snapshot, timeoutMs: 30000 },
       async () => {
         const placement = fx.placements.get(fx.SESSION_ID);
-        if (placement?.state !== "active") throw new Error("Expected real active placement");
+        if (placement?.state !== "active") {
+          throw new Error("Expected real active placement");
+        }
         const sandbox = await createRemoteExecPlacementSandbox({
           config: input.config,
           environments,

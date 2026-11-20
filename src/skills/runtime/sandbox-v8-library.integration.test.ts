@@ -105,7 +105,7 @@ it.each([false, true])(
             skillSource: "workspace",
           },
         ];
-        const attempt = { config, skillsSnapshot: snapshot };
+        const attempt = { config, skillsSnapshot: snapshot, sessionId: "sandbox-v8-library" };
         const prepared = await prepareEmbeddedSkills({
           separateRemoteNote: true,
           applySkillEnvironment: false,

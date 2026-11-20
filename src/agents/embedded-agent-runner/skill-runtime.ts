@@ -119,7 +119,9 @@ export async function prepareEmbeddedSkills(params: {
         preserveEntryOrder,
         assertCurrent: params.assertCurrent,
       });
-      if (params.separateRemoteNote) assertCurrentSkillSnapshotProjection(skillsSnapshot);
+      if (params.separateRemoteNote) {
+        assertCurrentSkillSnapshotProjection(skillsSnapshot);
+      }
     }
     const inputClass = classifySkillSnapshot(skillsSnapshot);
     let legacySkillsPromptFallback = Boolean(params.separateRemoteNote && inputClass === "legacy");
@@ -128,8 +130,9 @@ export async function prepareEmbeddedSkills(params: {
         const { catalogPrompt: _catalogPrompt, ...legacySnapshot } = skillsSnapshot;
         skillsSnapshot = legacySnapshot;
       }
-      if (params.separateRemoteNote)
+      if (params.separateRemoteNote) {
         skillsLogger.debug("Using established skills prompt for a legacy snapshot.");
+      }
     }
     // The established reader always receives base inputs; only the separated path
     // may consult live remote eligibility or remove the composed availability note.

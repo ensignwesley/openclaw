@@ -119,13 +119,21 @@ beforeAll(async () => {
   ownsInvocationRoot = !process.env.ROW_A_TABLE_ROOT;
 });
 afterAll(async () => {
-  if (ownsInvocationRoot) await fs.rm(invocationRoot, { recursive: true, force: true });
+  if (ownsInvocationRoot) {
+    await fs.rm(invocationRoot, { recursive: true, force: true });
+  }
 });
 registerParityHostLifecycle();
 function textStrings(value: unknown): string[] {
-  if (typeof value === "string") return [value];
-  if (Array.isArray(value)) return value.flatMap(textStrings);
-  if (value && typeof value === "object") return Object.values(value).flatMap(textStrings);
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap(textStrings);
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value).flatMap(textStrings);
+  }
   return [];
 }
 const shapes = ["no-pair", "both-empty", "pair-note", "pair-no-note"] as const;
@@ -133,8 +141,8 @@ const paths = ["none", "sandbox", "worker", "worker-turn", "attempt-only"] as co
 const ownerStates = ["available", "unavailable"] as const;
 const note =
   "Remote macOS node available (Matrix Mac). Run macOS-only skills via exec host=node on that node.";
-for (const shape of shapes)
-  for (const route of paths)
+for (const shape of shapes) {
+  for (const route of paths) {
     for (const owners of ownerStates) {
       it.skipIf(process.platform === "win32")(
         `class table ${shape}/${route}/${owners}`,
@@ -169,14 +177,17 @@ for (const shape of shapes)
               snapshot.promptFormatVersion = 8;
               snapshot.nodeSkillsEligibility = { canExec: true };
               snapshot.remoteNote = shape === "pair-no-note" ? undefined : note;
-              if (shape === "no-pair") delete snapshot.catalogPrompt;
-              else snapshot.catalogPrompt = plain;
+              if (shape === "no-pair") {
+                delete snapshot.catalogPrompt;
+              } else {
+                snapshot.catalogPrompt = plain;
+              }
               if (shape === "both-empty") {
                 snapshot.prompt = "";
                 snapshot.catalogPrompt = "";
               }
               // Force the real materialized owner even for both-empty input; do not use its empty fast path.
-              if (route === "sandbox")
+              if (route === "sandbox") {
                 snapshot.librarySelections = [
                   {
                     skillId: "11111111-1111-4111-8111-111111111111",
@@ -185,6 +196,7 @@ for (const shape of shapes)
                     ownerProfileId: null,
                   },
                 ];
+              }
               const connected = testRemoteSession("matrix-mac", {
                 displayName: "Matrix Mac",
                 platform: "darwin",
@@ -192,7 +204,7 @@ for (const shape of shapes)
               });
               setTestSkillsRemoteRegistry(connected.nodeId, { get: () => connected });
               recordRemoteNodeInfo(connected);
-              if (owners === "unavailable")
+              if (owners === "unavailable") {
                 setActiveDegradedSecretOwners([
                   {
                     ownerKind: "capability",
@@ -203,6 +215,7 @@ for (const shape of shapes)
                     reason: "Synthetic unavailable owner",
                   },
                 ]);
+              }
               let input = snapshot;
               let sandbox;
               if (route === "sandbox") {
@@ -260,7 +273,9 @@ for (const shape of shapes)
                 input = resources!.snapshot;
               }
               // Library selection has already been delivered in remap paths. No host library lookup.
-              if (route !== "sandbox") delete input.librarySelections;
+              if (route !== "sandbox") {
+                delete input.librarySelections;
+              }
               const attempt = {
                 config,
                 skillsSnapshot: input,
@@ -298,7 +313,7 @@ for (const shape of shapes)
                   },
                 },
               });
-              const contextInput = {
+              const contextInput: Parameters<typeof prepareEmbeddedAttemptPromptContext>[0] = {
                 attempt,
                 preparedSkills:
                   route === "attempt-only" || route === "worker-turn" ? undefined : prepared,
@@ -360,7 +375,7 @@ for (const shape of shapes)
                       history: [],
                       contextEngine: {},
                       assertCurrent: () => {},
-                    } as Parameters<typeof prepareWorkerTurnPrompt>[0])
+                    } as unknown as Parameters<typeof prepareWorkerTurnPrompt>[0])
                   : undefined;
               const read = createReadTool(workspace);
               const exchange = await captureAnthropicExchange("transport", {
@@ -452,7 +467,7 @@ for (const shape of shapes)
                 const legacy =
                   shape === "no-pair" || shape === "both-empty" || owners === "unavailable";
                 if (route === "worker-turn" || route === "attempt-only") {
-                  if (base)
+                  if (base) {
                     expect.soft(observed).toEqual({
                       catalogBytes: base.catalogBytes,
                       availability: base.availability,
@@ -461,6 +476,7 @@ for (const shape of shapes)
                         : { workerSystemPrompt: base.workerSystemPrompt }),
                       turnContext: base.turnContext,
                     });
+                  }
                   expect.soft(turnContext).not.toContain("Remote macOS ");
                   if (route === "worker-turn" && shape === "pair-note" && owners === "available") {
                     expect.soft(availability).toEqual([note]);
@@ -510,3 +526,5 @@ for (const shape of shapes)
         },
       );
     }
+  }
+}
