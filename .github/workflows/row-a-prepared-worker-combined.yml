@@ -1,0 +1,218 @@
+name: Row A fresh worker response combined GREEN
+on:
+  push:
+    branches: [proof/row-a-final-combined-chain-20261121]
+defaults:
+  run:
+    shell: bash
+permissions:
+  contents: read
+jobs:
+  controls:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Preflight exact proof-tree copy inputs before setup
+        run: |
+          set -euo pipefail
+          python3 scripts/proof/row-a-preflight.py
+      - name: Save exact corrected harness and fetch both owners
+        run: |
+          set -euo pipefail
+          cp scripts/proof/class-table.ts.txt "$RUNNER_TEMP/class-table.ts"
+          cp scripts/proof/remote-prefix-proof.ts.txt "$RUNNER_TEMP/corrected-proof.ts"
+          cp src/skills/runtime/legacy-precedence.integration.test.ts "$RUNNER_TEMP/legacy-proof.ts"
+          git fetch --no-tags --depth=1 origin 53633171bf52fddf2abe3c5549b97320febb2677 22cd98396afedb08c7fba1c02fe18ddf2c9a0694
+      - name: Create invocation-owned table root shared by both captures
+        run: |
+          set -euo pipefail
+          python3 - <<'ROOT'
+          import os,tempfile,pathlib
+          root=tempfile.mkdtemp(prefix='row-a-table-',dir=os.environ['RUNNER_TEMP'])
+          with open(os.environ['GITHUB_ENV'],'a') as f: f.write('ROW_A_TABLE_ROOT='+root+'\n')
+          receipt=pathlib.Path(os.environ['RUNNER_TEMP'])/'row-a-classifier-paired'/'owned-table-root.txt'
+          receipt.parent.mkdir(parents=True,exist_ok=True)
+          receipt.write_text(root)
+          ROOT
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Capture resolved baseline controls; prefix oracle is expected RED
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-classifier-paired/base
+        run: |
+          set -euo pipefail
+          git checkout --detach 53633171bf52fddf2abe3c5549b97320febb2677
+          cp "$RUNNER_TEMP/legacy-proof.ts" src/skills/runtime/legacy-precedence.integration.test.ts
+          cp "$RUNNER_TEMP/corrected-proof.ts" src/skills/runtime/remote-prefix-proof.integration.test.ts
+          mkdir -p "$ROW_A_RECEIPTS_DIR"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
+          set +e
+          node scripts/run-vitest.mjs src/skills/runtime/remote-prefix-proof.integration.test.ts --maxWorkers=1 > "$ROW_A_RECEIPTS_DIR/test.log" 2>&1
+          baseline_status=$?
+          set -e
+          echo "$baseline_status" > "$ROW_A_RECEIPTS_DIR/test.exit"
+          if [ "$baseline_status" != 1 ]; then cat "$ROW_A_RECEIPTS_DIR/test.log"; exit 1; fi
+          node --input-type=module -e 'import fs from "node:fs"; const p=process.env.ROW_A_RECEIPTS_DIR; const c=JSON.parse(fs.readFileSync(p+"/legacy-controls.json")); const o=JSON.parse(fs.readFileSync(p+"/observations.json")); if(c.length!==28||c.some(x=>typeof x.cli!=="string"||!x.cli)||o.requests.length!==7||!o.pairs.some(x=>x.systemFirstDifferingByte!==null))throw Error("Unqualified baseline control");'
+          node scripts/run-vitest.mjs src/skills/runtime/legacy-precedence.integration.test.ts --testNamePattern 'empty legacy sandbox' --maxWorkers=1 2>&1 | tee "$ROW_A_RECEIPTS_DIR/empty-legacy.log"
+          rm src/skills/runtime/legacy-precedence.integration.test.ts
+      - name: Base 41-cell table on the same runner
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          ROW_A_BASELINE: "1"
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-classifier-paired/table/base
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/class-table.ts" src/skills/runtime/snapshot-class-table.integration.test.ts
+          mkdir -p "$ROW_A_RECEIPTS_DIR"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
+          set +e
+          node scripts/run-vitest.mjs src/skills/runtime/snapshot-class-table.integration.test.ts --maxWorkers=1 > "$ROW_A_RECEIPTS_DIR/test.log" 2>&1
+          table_status=$?
+          set -e
+          echo "$table_status" > "$ROW_A_RECEIPTS_DIR/test.exit"
+          cat "$ROW_A_RECEIPTS_DIR/test.log"
+          test "$table_status" = 0
+          rm src/skills/runtime/snapshot-class-table.integration.test.ts
+      - name: Capture corrected candidate controls and prove actual equality
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-classifier-paired/candidate
+        run: |
+          set -euo pipefail
+          git checkout --detach 22cd98396afedb08c7fba1c02fe18ddf2c9a0694
+          cp "$RUNNER_TEMP/corrected-proof.ts" src/skills/runtime/remote-prefix-proof.integration.test.ts
+          mkdir -p "$ROW_A_RECEIPTS_DIR"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
+          node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/attempt-prompt-context.test.ts src/skills/runtime/embedded-run-entries.test.ts src/skills/runtime/legacy-precedence.integration.test.ts src/skills/runtime/separated-recovery.integration.test.ts src/skills/runtime/sandbox-v8-library.integration.test.ts src/gateway/worker-environments/worker-skill-prefix.integration.test.ts src/gateway/worker-environments/skill-resource-transfer.test.ts src/skills/runtime/sandbox-catalog.integration.test.ts src/agents/embedded-agent-runner/sandbox-skills.test.ts src/skills/runtime/remote-note-review.integration.test.ts src/skills/loading/workspace-skill-prompt-resolution.test.ts --maxWorkers=1 2>&1 | tee "$ROW_A_RECEIPTS_DIR/focused.log"
+          node scripts/run-vitest.mjs src/skills/runtime/remote-prefix-proof.integration.test.ts --maxWorkers=1 2>&1 | tee "$ROW_A_RECEIPTS_DIR/test.log"
+          node --input-type=module -e 'import fs from "node:fs"; const p=process.env.ROW_A_RECEIPTS_DIR; const a=fs.readFileSync(p+"/../base/legacy-controls.json");const b=fs.readFileSync(p+"/legacy-controls.json");const c=JSON.parse(b);fs.writeFileSync(p+"/comparison.json",JSON.stringify({count:c.length,cliResolved:c.every(x=>typeof x.cli==="string"&&x.cli.length>0),byteIdentical:a.equals(b)},null,2));if(c.length!==28||c.some(x=>typeof x.cli!=="string"||!x.cli)||!a.equals(b))throw Error("Legacy bytes changed: STOP, do not proceed to B");'
+      - name: Candidate tracked 41-cell table against fresh base
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          ROW_A_BASE_RECEIPTS: ${{ runner.temp }}/row-a-classifier-paired/table/base
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-classifier-paired/table/candidate
+        run: |
+          set -euo pipefail
+          mkdir -p "$ROW_A_RECEIPTS_DIR"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
+          git diff --exit-code -- src/skills/runtime
+          set +e
+          node scripts/run-vitest.mjs src/skills/runtime/snapshot-class-table.integration.test.ts --maxWorkers=1 > "$ROW_A_RECEIPTS_DIR/test.log" 2>&1
+          table_status=$?
+          set -e
+          echo "$table_status" > "$ROW_A_RECEIPTS_DIR/test.exit"
+          cat "$ROW_A_RECEIPTS_DIR/test.log"
+          test "$table_status" = 0
+      - name: Compare exact legacy remote-availability bytes for empty sandbox snapshots
+        env:
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-classifier-paired
+        run: |
+          set -euo pipefail
+          for fixture in empty-positive empty-absent empty-pair; do
+            cmp "$ROW_A_RECEIPTS_DIR/base/$fixture.availability.json" "$ROW_A_RECEIPTS_DIR/candidate/$fixture.availability.json"
+          done
+      - name: Preserve full control evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: row-a-classifier-paired-${{ github.sha }}
+          path: ${{ runner.temp }}/row-a-classifier-paired
+          if-no-files-found: error
+          retention-days: 30
+      - name: Creator releases only this invocation-owned table root
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 - <<'ROOT'
+          import os,pathlib,shutil
+          receipt=pathlib.Path(os.environ['RUNNER_TEMP'])/'row-a-classifier-paired'/'owned-table-root.txt'
+          if receipt.exists():
+              owned=receipt.read_text()
+              assert owned==os.environ.get('ROW_A_TABLE_ROOT')
+              shutil.rmtree(owned)
+          ROOT
+
+  final:
+    needs: controls
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          ref: 22cd98396afedb08c7fba1c02fe18ddf2c9a0694
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Check all own-change formatting and final sandbox model request
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-classifier-format-exact
+        run: |
+          set -euo pipefail
+          mkdir -p "$ROW_A_RECEIPTS_DIR"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/owner-head.txt"
+          git fetch --no-tags --depth=1 origin 53633171bf52fddf2abe3c5549b97320febb2677
+          mapfile -t files < <(git diff --name-only 53633171bf52fddf2abe3c5549b97320febb2677 HEAD -- '*.ts' '*.mjs' '*.mts')
+          printf '%s\n' "${files[@]}" > "$ROW_A_RECEIPTS_DIR/changed-source-files.txt"
+          sha256sum "${files[@]}" > "$ROW_A_RECEIPTS_DIR/before.sha256"
+          set +e
+          corepack pnpm exec oxfmt --check "${files[@]}" 2>&1 | tee "$ROW_A_RECEIPTS_DIR/format-check.log"
+          format_status=${PIPESTATUS[0]}
+          echo "$format_status" > "$ROW_A_RECEIPTS_DIR/format.exit"
+          if [ "$format_status" != 0 ]; then exit "$format_status"; fi
+          node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/attempt-prompt-context.test.ts src/skills/runtime/remote-note-review.integration.test.ts src/skills/runtime/snapshot-class-table.integration.test.ts src/skills/runtime/embedded-run-entries.test.ts src/skills/runtime/legacy-precedence.integration.test.ts src/skills/runtime/separated-recovery.integration.test.ts src/skills/runtime/sandbox-v8-library.integration.test.ts src/gateway/worker-environments/worker-skill-prefix.integration.test.ts --maxWorkers=1 2>&1 | tee "$ROW_A_RECEIPTS_DIR/exact-tests.log"
+          exact_status=${PIPESTATUS[0]}
+          echo "$exact_status" > "$ROW_A_RECEIPTS_DIR/exact.exit"
+          if [ "$exact_status" != 0 ]; then exit "$exact_status"; fi
+          set -e
+          sha256sum "${files[@]}" > "$ROW_A_RECEIPTS_DIR/after.sha256"
+          cmp "$ROW_A_RECEIPTS_DIR/before.sha256" "$ROW_A_RECEIPTS_DIR/after.sha256"
+          git diff --exit-code HEAD
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/final-head.txt"
+      - name: Native touched-file core lint then production and test types
+        env:
+          ROW_A_RECEIPTS_DIR: ${{ runner.temp }}/row-a-classifier-format-exact
+          GOMAXPROCS: "2"
+        run: |
+          set -euo pipefail
+          files_json=$(python3 -c 'import pathlib,json,os; print(json.dumps([p for p in pathlib.Path(os.environ["ROW_A_RECEIPTS_DIR"]).joinpath("changed-source-files.txt").read_text().splitlines() if p.startswith(("src/", "ui/", "packages/"))]))')
+          set +e
+          node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --threads=1 --files-json "$files_json" 2>&1 | tee "$ROW_A_RECEIPTS_DIR/native-lint.log"
+          lint_status=${PIPESTATUS[0]}
+          echo "$lint_status" > "$ROW_A_RECEIPTS_DIR/native-lint.exit"
+          if [ "$lint_status" != 0 ]; then exit "$lint_status"; fi
+          # The core selector excludes test/. Check the one touched test harness explicitly with the same config.
+          python3 -c 'import pathlib,os; files=pathlib.Path(os.environ["ROW_A_RECEIPTS_DIR"]).joinpath("changed-source-files.txt").read_text().splitlines(); assert [p for p in files if not p.startswith(("src/", "ui/", "packages/"))] == ["test/vitest/vitest.gateway-server-paths.mjs"]'
+          scope_status=$?
+          if [ "$scope_status" != 0 ]; then echo "$scope_status" > "$ROW_A_RECEIPTS_DIR/native-lint.exit"; exit "$scope_status"; fi
+          node --import ./scripts/tsx.mjs scripts/run-oxlint.mts --tsconfig config/tsconfig/oxlint.core.json test/vitest/vitest.gateway-server-paths.mjs --threads=1 2>&1 | tee "$ROW_A_RECEIPTS_DIR/native-lint-test-harness.log"
+          extra_status=${PIPESTATUS[0]}
+          echo "$extra_status" > "$ROW_A_RECEIPTS_DIR/native-lint-test-harness.exit"
+          if [ "$extra_status" != 0 ]; then echo "$extra_status" > "$ROW_A_RECEIPTS_DIR/native-lint.exit"; exit "$extra_status"; fi
+          corepack pnpm tsgo:core 2>&1 | tee "$ROW_A_RECEIPTS_DIR/core.log"
+          core_status=${PIPESTATUS[0]}
+          echo "$core_status" > "$ROW_A_RECEIPTS_DIR/core.exit"
+          if [ "$core_status" != 0 ]; then exit "$core_status"; fi
+          corepack pnpm tsgo:core:test 2>&1 | tee "$ROW_A_RECEIPTS_DIR/core-test.log"
+          test_status=${PIPESTATUS[0]}
+          echo "$test_status" > "$ROW_A_RECEIPTS_DIR/core-test.exit"
+          git rev-parse HEAD > "$ROW_A_RECEIPTS_DIR/types-final-head.txt"
+          exit "$test_status"
+      - name: Preserve final proof
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: row-a-classifier-format-exact-${{ github.sha }}
+          path: ${{ runner.temp }}/row-a-classifier-format-exact
+          if-no-files-found: error
+          retention-days: 30
