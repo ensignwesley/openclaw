@@ -1,0 +1,58 @@
+name: Row A bounded UI base evidence
+on:
+  push:
+    branches: [proof/row-a-ui-base-evidence-20261121]
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  base-ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Preserve harness and check out exact base
+        run: |
+          set -euo pipefail
+          cp -r scripts/row-a-ui-base "$RUNNER_TEMP/row-a-ui-base-harness"
+          mkdir -p "$RUNNER_TEMP/row-a-ui-base-receipts"
+          git checkout --detach 53633171bf52fddf2abe3c5549b97320febb2677
+          echo CHECKOUT_SHA=$(git rev-parse HEAD) | tee "$RUNNER_TEMP/row-a-ui-base-receipts/checkout.txt"
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          install-bun: "false"
+          cache-mode: "off"
+      - uses: ./.github/actions/setup-test-bun
+        with:
+          cache-mode: "off"
+      - uses: ./.github/actions/setup-playwright-chromium
+        with:
+          cache-mode: "off"
+          compatibility-target: "false"
+      - name: Install WebKit for original e2e shard
+        run: |
+          set -euo pipefail
+          pnpm --dir ui exec playwright install --with-deps webkit
+      - name: Base-only three checks with actual exit receipts
+        env:
+          BASE: 53633171bf52fddf2abe3c5549b97320febb2677
+          RECEIPTS: ${{ runner.temp }}/row-a-ui-base-receipts
+          OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
+          OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT: "0"
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/row-a-ui-base-harness/runner.py"
+      - name: Preserve config lists budgets measurements and every failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: row-a-ui-base-${{ github.sha }}
+          path: ${{ runner.temp }}/row-a-ui-base-receipts
+          if-no-files-found: error
+          retention-days: 30
