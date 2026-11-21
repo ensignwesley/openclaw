@@ -1,0 +1,3 @@
+src/agents/embedded-agent-runner/run/attempt-prompt-phase.runtime-marker.test.ts
+src/agents/embedded-agent-runner/run/attempt-prompt-phase.test.ts
+src/agents/embedded-agent-runner/run/attempt-tool-search-prompt.test.ts
