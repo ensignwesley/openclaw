@@ -1,0 +1,44 @@
+name: Clock-pass paired owning suites
+on:
+  push:
+    branches: [proof/clock-pass-paired-20261121]
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  paired:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Preserve paired harness and check out product
+        run: |
+          set -euo pipefail
+          cp -r scripts/clock-pass-proof "$RUNNER_TEMP/clock-pass-harness"
+          git checkout --detach 17f8095a6331cd75a07424075c102a9fa152c823
+          echo CHECKOUT_SHA=$(git rev-parse HEAD)
+      - uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Paired owning suites and conservative controls
+        env:
+          PRODUCT: 17f8095a6331cd75a07424075c102a9fa152c823
+          BASE: c7f0d533696fbc7a140614cf84f1961f186a6012
+          RECEIPTS: ${{ runner.temp }}/clock-pass-receipts
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/clock-pass-harness/runner.py"
+      - name: Preserve actual proof exits
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: clock-pass-paired-${{ github.sha }}
+          path: ${{ runner.temp }}/clock-pass-receipts
+          if-no-files-found: error
+          retention-days: 30
