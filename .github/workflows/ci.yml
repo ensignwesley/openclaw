@@ -28,6 +28,7 @@ jobs:
           git rev-parse HEAD > "$EVIDENCE/workflow-pin.txt"
           cp .github/runtime-cache-proof/run-pair.sh "$RUNNER_TEMP/run-runtime-cache-pair.sh"
           bash -n "$RUNNER_TEMP/run-runtime-cache-pair.sh"
+          git fetch --no-tags --depth=1 origin "$BASE_SHA" "$CANDIDATE_SHA"
           git cat-file -e "$BASE_SHA^{commit}"
           git cat-file -e "$CANDIDATE_SHA^{commit}"
           git diff --binary "$BASE_SHA" "$CANDIDATE_SHA" > "$EVIDENCE/candidate.patch"
