@@ -31,8 +31,8 @@ jobs:
           git fetch --no-tags --depth=1 origin "$BASE_SHA" "$CANDIDATE_SHA"
           git cat-file -e "$BASE_SHA^{commit}"
           git cat-file -e "$CANDIDATE_SHA^{commit}"
-          git diff --binary "$BASE_SHA" "$CANDIDATE_SHA" > "$EVIDENCE/candidate.patch"
-          printf '%s  %s\n' 48b63a62a9168db816063436034644fc403e610d8f68a6f687a855a162f61420 "$EVIDENCE/candidate.patch" | sha256sum --check
+          git diff --full-index --binary "$BASE_SHA" "$CANDIDATE_SHA" > "$EVIDENCE/candidate.patch"
+          printf '%s  %s\n' 9916c8547e8e3dffa8953f87c766461cf2d684ec114dd799d342894df4490e13 "$EVIDENCE/candidate.patch" | sha256sum --check
           python3 - <<'PY'
           import os,subprocess
           files=subprocess.check_output(['git','diff','--name-only',os.environ['BASE_SHA'],os.environ['CANDIDATE_SHA']],text=True).splitlines()
