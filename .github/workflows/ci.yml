@@ -12,7 +12,6 @@ jobs:
     env:
       BASE_SHA: 0a8e37b7d5cceb45e9b34de45c1dea5419166fc9
       CANDIDATE_SHA: efb797d3cb6ac9f4d8cd9d17a8ad698f713a0074
-      EVIDENCE: ${{ runner.temp }}/runtime-cache-evidence
     steps:
       - name: Checkout frozen harness and source history
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -23,6 +22,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export EVIDENCE="$RUNNER_TEMP/runtime-cache-evidence"
+          printf 'EVIDENCE=%s\n' "$EVIDENCE" >> "$GITHUB_ENV"
           mkdir -p "$EVIDENCE"
           git rev-parse HEAD > "$EVIDENCE/workflow-pin.txt"
           cp .github/runtime-cache-proof/run-pair.sh "$RUNNER_TEMP/run-runtime-cache-pair.sh"
